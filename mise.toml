@@ -1,0 +1,4 @@
+[tools]
+codex = "latest"
+go = "1.26.4"
+node = "26.4.0"
