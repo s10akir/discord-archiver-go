@@ -82,7 +82,7 @@ docker run --rm \
   discord-archiver -out-dir /data/archive
 ```
 
-`docker-compose.yml.example` も同じ設定例です。
+`compose.yaml.example` も同じ設定例です。
 
 ## Output
 
