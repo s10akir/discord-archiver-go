@@ -26,10 +26,10 @@ go run ./cmd/discord-archiver \
   -out discord-archive.jsonl
 ```
 
-デフォルトでは通常チャンネルに加えて、アクティブスレッドと公開アーカイブ済みスレッドも取得します。Botから見える非公開アーカイブ済みスレッドも対象にする場合は `-private-threads` を付けます。
+デフォルトでは通常チャンネルに加えて、アクティブスレッド、公開アーカイブ済みスレッド、Botから見える非公開アーカイブ済みスレッドも取得します。非公開アーカイブ済みスレッドを除外する場合は `-no-private-threads` を付けます。
 
 ```bash
-go run ./cmd/discord-archiver -private-threads -out discord-archive.jsonl
+go run ./cmd/discord-archiver -no-private-threads -out discord-archive.jsonl
 ```
 
 ## Output

@@ -42,11 +42,11 @@ func main() {
 		guildID        = flag.String("guild", os.Getenv("DISCORD_GUILD_ID"), "Discord guild/server ID. Defaults to DISCORD_GUILD_ID.")
 		outputPath     = flag.String("out", "discord-archive.jsonl", "Output JSONL file path.")
 		includeThreads = flag.Bool("threads", true, "Include active and archived threads.")
-		includePrivate = flag.Bool("private-threads", false, "Include private archived threads visible to the bot.")
+		excludePrivate = flag.Bool("no-private-threads", false, "Exclude private archived threads visible to the bot.")
 	)
 	flag.Parse()
 
-	if err := run(*token, *guildID, *outputPath, *includeThreads, *includePrivate); err != nil {
+	if err := run(*token, *guildID, *outputPath, *includeThreads, !*excludePrivate); err != nil {
 		log.Fatal(err)
 	}
 }
