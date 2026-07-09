@@ -7,8 +7,6 @@ import (
 	"fmt"
 	"log"
 	"time"
-
-	"github.com/bwmarrin/discordgo"
 )
 
 // DefaultLocation is the IANA timezone used to partition archives by date.
@@ -51,10 +49,11 @@ func Run(config Config, date string) error {
 		return err
 	}
 
-	session, err := discordgo.New("Bot " + config.Token)
+	client, err := newSessionClient(config.Token)
 	if err != nil {
-		return fmt.Errorf("create discord session: %w", err)
+		return err
 	}
+	defer client.Close()
 
 	output, err := newArchiveOutput(config.OutputDir, config.GuildID, filter)
 	if err != nil {
@@ -62,10 +61,14 @@ func Run(config Config, date string) error {
 	}
 	defer output.Cleanup()
 
+	return runArchive(client, output, config, filter, partitionLocation)
+}
+
+// runArchive drives one pass: fetch via client, write via output.
+func runArchive(client discordClient, output archiveWriter, config Config, filter *dateFilter, partitionLocation *time.Location) error {
 	a := &archiver{
-		session:            session,
+		client:             client,
 		guildID:            config.GuildID,
-		includeThreads:     config.IncludeThreads,
 		includePrivate:     config.IncludePrivate,
 		partitionLocation:  partitionLocation,
 		dateFilter:         filter,
@@ -74,7 +77,7 @@ func Run(config Config, date string) error {
 		seenThreadMetadata: make(map[string]struct{}),
 	}
 
-	channels, err := session.GuildChannels(config.GuildID)
+	channels, err := client.GuildChannels(config.GuildID)
 	if err != nil {
 		return fmt.Errorf("list guild channels: %w", err)
 	}
@@ -102,9 +105,5 @@ func Run(config Config, date string) error {
 	if err := output.Close(); err != nil {
 		return err
 	}
-	if err := output.Commit(); err != nil {
-		return err
-	}
-
-	return nil
+	return output.Commit()
 }

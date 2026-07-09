@@ -12,6 +12,22 @@ import (
 	"time"
 )
 
+// archiveWriter is the output-side boundary: where archived records go.
+// archiveOutput implements it with local JSONL files; alternative
+// destinations (e.g. S3-compatible storage) can implement it without
+// touching the fetch logic.
+type archiveWriter interface {
+	WriteChannelMetadata(record channelRecord) error
+	WriteThreadMetadata(record threadRecord) error
+	WriteMessage(date, channelID string, record archiveRecord) error
+	// Close flushes and closes open files. Commit publishes staged output
+	// (temp date partition, temp metadata files) and must only be called
+	// after Close succeeds. Cleanup discards anything left unpublished.
+	Close() error
+	Commit() error
+	Cleanup()
+}
+
 // staleTempMaxAge is how old a leftover temp/backup entry from a crashed run
 // must be before a later run sweeps it. Generous so that a still-running
 // concurrent archive is never deleted.
