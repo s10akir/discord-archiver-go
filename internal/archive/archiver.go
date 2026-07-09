@@ -18,6 +18,14 @@ type archiver struct {
 	output             archiveWriter
 	seenChannels       map[string]struct{}
 	seenThreadMetadata map[string]struct{}
+	failures           []error
+}
+
+// fail records a per-channel/per-thread failure and lets the pass continue;
+// runArchive joins the collected failures into the final error.
+func (a *archiver) fail(err error) {
+	log.Print(err)
+	a.failures = append(a.failures, err)
 }
 
 func canContainMessages(channelType discordgo.ChannelType) bool {
@@ -132,17 +140,13 @@ func messageTimestamp(message *discordgo.Message) (time.Time, error) {
 	return timestamp, nil
 }
 
-func (a *archiver) archiveThreads(parentChannels []*discordgo.Channel) error {
+func (a *archiver) archiveThreads(parentChannels []*discordgo.Channel) {
 	activeThreads, err := a.client.GuildThreadsActive(a.guildID)
 	if err != nil {
-		return fmt.Errorf("list active threads: %w", err)
-	}
-	for _, thread := range activeThreads.Threads {
-		if err := a.writeThreadMetadata("active", thread); err != nil {
-			return err
-		}
-		if err := a.archiveChannel(thread); err != nil {
-			log.Printf("archive active thread %s (%s): %v", thread.Name, thread.ID, err)
+		a.fail(fmt.Errorf("list active threads: %w", err))
+	} else {
+		for _, thread := range activeThreads.Threads {
+			a.archiveThread("active", thread)
 		}
 	}
 
@@ -151,16 +155,26 @@ func (a *archiver) archiveThreads(parentChannels []*discordgo.Channel) error {
 			continue
 		}
 		if err := a.archiveArchivedThreads("public_archived", parent.ID, a.client.ThreadsArchived); err != nil {
-			log.Printf("archive public archived threads for %s (%s): %v", parent.Name, parent.ID, err)
+			a.fail(fmt.Errorf("archive public archived threads for %s (%s): %w", parent.Name, parent.ID, err))
 		}
 		if a.includePrivate {
 			if err := a.archiveArchivedThreads("private_archived", parent.ID, a.client.ThreadsPrivateArchived); err != nil {
-				log.Printf("archive private archived threads for %s (%s): %v", parent.Name, parent.ID, err)
+				a.fail(fmt.Errorf("archive private archived threads for %s (%s): %w", parent.Name, parent.ID, err))
 			}
 		}
 	}
+}
 
-	return nil
+func (a *archiver) archiveThread(source string, thread *discordgo.Channel) {
+	if thread == nil {
+		return
+	}
+	if err := a.writeThreadMetadata(source, thread); err != nil {
+		a.fail(fmt.Errorf("write %s thread metadata %s (%s): %w", source, thread.Name, thread.ID, err))
+	}
+	if err := a.archiveChannel(thread); err != nil {
+		a.fail(fmt.Errorf("archive %s thread %s (%s): %w", source, thread.Name, thread.ID, err))
+	}
 }
 
 func (a *archiver) writeThreadMetadata(source string, thread *discordgo.Channel) error {
@@ -186,12 +200,7 @@ func (a *archiver) archiveArchivedThreads(source, parentChannelID string, fetch 
 		}
 
 		for _, thread := range threads.Threads {
-			if err := a.writeThreadMetadata(source, thread); err != nil {
-				return err
-			}
-			if err := a.archiveChannel(thread); err != nil {
-				log.Printf("archive %s thread %s (%s): %v", source, thread.Name, thread.ID, err)
-			}
+			a.archiveThread(source, thread)
 		}
 		if !threads.HasMore {
 			return nil

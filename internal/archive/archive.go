@@ -5,7 +5,6 @@ package archive
 import (
 	"errors"
 	"fmt"
-	"log"
 	"time"
 )
 
@@ -64,7 +63,9 @@ func Run(config Config, date string) error {
 	return runArchive(client, output, config, filter, partitionLocation)
 }
 
-// runArchive drives one pass: fetch via client, write via output.
+// runArchive drives one pass: fetch via client, write via output. Failures on
+// individual channels and threads are collected so one broken channel does not
+// abort the rest, but any failure makes the whole pass return an error.
 func runArchive(client discordClient, output archiveWriter, config Config, filter *dateFilter, partitionLocation *time.Location) error {
 	a := &archiver{
 		client:             client,
@@ -92,18 +93,24 @@ func runArchive(client discordClient, output archiveWriter, config Config, filte
 			continue
 		}
 		if err := a.archiveChannel(channel); err != nil {
-			log.Printf("archive channel %s (%s): %v", channel.Name, channel.ID, err)
+			a.fail(fmt.Errorf("archive channel %s (%s): %w", channel.Name, channel.ID, err))
 		}
 	}
 
 	if config.IncludeThreads {
-		if err := a.archiveThreads(channels); err != nil {
-			return err
-		}
+		a.archiveThreads(channels)
 	}
 
+	failures := a.failures
 	if err := output.Close(); err != nil {
-		return err
+		// Staged files may be truncated; do not publish them.
+		failures = append(failures, err)
+		return errors.Join(failures...)
 	}
-	return output.Commit()
+	// Commit even after per-channel failures so everything that was fetched
+	// is kept; the joined error still marks the pass as failed.
+	if err := output.Commit(); err != nil {
+		failures = append(failures, err)
+	}
+	return errors.Join(failures...)
 }

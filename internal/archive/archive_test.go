@@ -2,9 +2,11 @@ package archive
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -297,5 +299,88 @@ func TestNewArchiveOutputRemovesStaleTempEntries(t *testing.T) {
 		if _, err := os.Stat(path); err != nil {
 			t.Fatalf("non-stale entry removed: %s: %v", path, err)
 		}
+	}
+}
+
+type fakeDiscordClient struct {
+	channels     []*discordgo.Channel
+	messages     map[string][]*discordgo.Message
+	failChannels map[string]error
+}
+
+func (c *fakeDiscordClient) GuildChannels(guildID string) ([]*discordgo.Channel, error) {
+	return c.channels, nil
+}
+
+func (c *fakeDiscordClient) GuildThreadsActive(guildID string) (*discordgo.ThreadsList, error) {
+	return &discordgo.ThreadsList{}, nil
+}
+
+func (c *fakeDiscordClient) ThreadsArchived(channelID string, before *time.Time, limit int) (*discordgo.ThreadsList, error) {
+	return &discordgo.ThreadsList{}, nil
+}
+
+func (c *fakeDiscordClient) ThreadsPrivateArchived(channelID string, before *time.Time, limit int) (*discordgo.ThreadsList, error) {
+	return &discordgo.ThreadsList{}, nil
+}
+
+func (c *fakeDiscordClient) ChannelMessages(channelID string, limit int, beforeID string) ([]*discordgo.Message, error) {
+	if err := c.failChannels[channelID]; err != nil {
+		return nil, err
+	}
+	if beforeID != "" {
+		return nil, nil
+	}
+	return c.messages[channelID], nil
+}
+
+func (c *fakeDiscordClient) Close() error { return nil }
+
+func TestRunArchiveCollectsChannelFailures(t *testing.T) {
+	root := t.TempDir()
+	loc, err := time.LoadLocation(DefaultLocation)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	client := &fakeDiscordClient{
+		channels: []*discordgo.Channel{
+			{ID: "bad", Name: "bad", Type: discordgo.ChannelTypeGuildText},
+			{ID: "good", Name: "good", Type: discordgo.ChannelTypeGuildText},
+		},
+		messages: map[string][]*discordgo.Message{
+			"good": {{
+				ID:        "message1",
+				ChannelID: "good",
+				Content:   "hello",
+				Timestamp: time.Date(2026, 7, 8, 15, 0, 0, 0, time.UTC),
+			}},
+		},
+		failChannels: map[string]error{"bad": errors.New("boom")},
+	}
+
+	output, err := newArchiveOutput(root, "guild1", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer output.Cleanup()
+
+	config := Config{Token: "token", GuildID: "guild1", OutputDir: root, IncludeThreads: true}
+	err = runArchive(client, output, config, nil, loc)
+	if err == nil {
+		t.Fatal("runArchive() = nil, want error for failed channel")
+	}
+	if !strings.Contains(err.Error(), "bad") || !strings.Contains(err.Error(), "boom") {
+		t.Fatalf("error missing failed channel context: %v", err)
+	}
+
+	// The failure on one channel must not prevent archiving the others.
+	messagePath := filepath.Join(root, "guild_id=guild1", "messages", "date=2026-07-09", "channel_id=good", "messages.jsonl")
+	if _, err := os.Stat(messagePath); err != nil {
+		t.Fatalf("good channel messages missing: %v", err)
+	}
+	metadataPath := filepath.Join(root, "guild_id=guild1", "metadata", "channels.jsonl")
+	if _, err := os.Stat(metadataPath); err != nil {
+		t.Fatalf("channel metadata not committed: %v", err)
 	}
 }
