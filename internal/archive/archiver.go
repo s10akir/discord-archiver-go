@@ -1,0 +1,251 @@
+package archive
+
+import (
+	"errors"
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/bwmarrin/discordgo"
+)
+
+type archiver struct {
+	session            *discordgo.Session
+	guildID            string
+	includeThreads     bool
+	includePrivate     bool
+	partitionLocation  *time.Location
+	dateFilter         *dateFilter
+	output             *archiveOutput
+	seenChannels       map[string]struct{}
+	seenThreadMetadata map[string]struct{}
+}
+
+func canContainMessages(channelType discordgo.ChannelType) bool {
+	switch channelType {
+	case discordgo.ChannelTypeGuildText,
+		discordgo.ChannelTypeGuildNews,
+		discordgo.ChannelTypeGuildVoice,
+		discordgo.ChannelTypeGuildNewsThread,
+		discordgo.ChannelTypeGuildPublicThread,
+		discordgo.ChannelTypeGuildPrivateThread:
+		return true
+	default:
+		return false
+	}
+}
+
+func canContainThreads(channelType discordgo.ChannelType) bool {
+	switch channelType {
+	case discordgo.ChannelTypeGuildText,
+		discordgo.ChannelTypeGuildNews,
+		discordgo.ChannelTypeGuildForum,
+		discordgo.ChannelTypeGuildMedia:
+		return true
+	default:
+		return false
+	}
+}
+
+func (a *archiver) archiveChannel(channel *discordgo.Channel) error {
+	if channel == nil {
+		return nil
+	}
+	if _, ok := a.seenChannels[channel.ID]; ok {
+		return nil
+	}
+	a.seenChannels[channel.ID] = struct{}{}
+
+	log.Printf("archiving channel %s (%s)", channel.Name, channel.ID)
+
+	var beforeID string
+	for {
+		messages, err := channelMessagesCompat(a.session, channel.ID, 100, beforeID, "", "")
+		if err != nil {
+			return err
+		}
+		if len(messages) == 0 {
+			return nil
+		}
+
+		stopChannel := false
+		for _, message := range messages {
+			messageTime, err := messageTimestamp(message)
+			if err != nil {
+				return err
+			}
+
+			include, olderThanFilter := a.shouldArchiveMessage(messageTime)
+			if olderThanFilter {
+				stopChannel = true
+				break
+			}
+			if !include {
+				continue
+			}
+
+			record := archiveRecord{
+				GuildID:     a.guildID,
+				ChannelID:   channel.ID,
+				ChannelName: channel.Name,
+				ChannelType: channel.Type,
+				ParentID:    channel.ParentID,
+				Message:     message,
+			}
+			date := partitionDate(messageTime, a.partitionLocation)
+			if err := a.output.WriteMessage(date, channel.ID, record); err != nil {
+				return err
+			}
+		}
+
+		if stopChannel {
+			return nil
+		}
+		beforeID = messages[len(messages)-1].ID
+	}
+}
+
+func (a *archiver) shouldArchiveMessage(messageTime time.Time) (include bool, olderThanFilter bool) {
+	if a.dateFilter == nil {
+		return true, false
+	}
+	if messageTime.Before(a.dateFilter.Start) {
+		return false, true
+	}
+	if !messageTime.Before(a.dateFilter.End) {
+		return false, false
+	}
+	return true, false
+}
+
+func messageTimestamp(message *discordgo.Message) (time.Time, error) {
+	if message == nil {
+		return time.Time{}, errors.New("nil message")
+	}
+	if !message.Timestamp.IsZero() {
+		return message.Timestamp, nil
+	}
+
+	timestamp, err := discordgo.SnowflakeTimestamp(message.ID)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("derive message timestamp from snowflake %q: %w", message.ID, err)
+	}
+	return timestamp, nil
+}
+
+func (a *archiver) archiveThreads(parentChannels []*discordgo.Channel) error {
+	activeThreads, err := a.session.GuildThreadsActive(a.guildID)
+	if err != nil {
+		return fmt.Errorf("list active threads: %w", err)
+	}
+	for _, thread := range activeThreads.Threads {
+		if err := a.writeThreadMetadata("active", thread); err != nil {
+			return err
+		}
+		if err := a.archiveChannel(thread); err != nil {
+			log.Printf("archive active thread %s (%s): %v", thread.Name, thread.ID, err)
+		}
+	}
+
+	for _, parent := range parentChannels {
+		if !canContainThreads(parent.Type) {
+			continue
+		}
+		if err := a.archivePublicArchivedThreads(parent.ID); err != nil {
+			log.Printf("archive public archived threads for %s (%s): %v", parent.Name, parent.ID, err)
+		}
+		if a.includePrivate {
+			if err := a.archivePrivateArchivedThreads(parent.ID); err != nil {
+				log.Printf("archive private archived threads for %s (%s): %v", parent.Name, parent.ID, err)
+			}
+		}
+	}
+
+	return nil
+}
+
+func (a *archiver) writeThreadMetadata(source string, thread *discordgo.Channel) error {
+	if thread == nil {
+		return nil
+	}
+	if _, ok := a.seenThreadMetadata[thread.ID]; ok {
+		return nil
+	}
+	a.seenThreadMetadata[thread.ID] = struct{}{}
+	return a.output.WriteThreadMetadata(threadRecord{GuildID: a.guildID, Source: source, Thread: thread})
+}
+
+func (a *archiver) archivePublicArchivedThreads(parentChannelID string) error {
+	var before *time.Time
+	for {
+		threads, err := a.session.ThreadsArchived(parentChannelID, before, 100)
+		if err != nil {
+			return err
+		}
+		if len(threads.Threads) == 0 {
+			return nil
+		}
+
+		for _, thread := range threads.Threads {
+			if err := a.writeThreadMetadata("public_archived", thread); err != nil {
+				return err
+			}
+			if err := a.archiveChannel(thread); err != nil {
+				log.Printf("archive public archived thread %s (%s): %v", thread.Name, thread.ID, err)
+			}
+		}
+		if !threads.HasMore {
+			return nil
+		}
+
+		before = oldestArchiveTimestamp(threads.Threads)
+		if before == nil {
+			return nil
+		}
+	}
+}
+
+func (a *archiver) archivePrivateArchivedThreads(parentChannelID string) error {
+	var before *time.Time
+	for {
+		threads, err := a.session.ThreadsPrivateArchived(parentChannelID, before, 100)
+		if err != nil {
+			return err
+		}
+		if len(threads.Threads) == 0 {
+			return nil
+		}
+
+		for _, thread := range threads.Threads {
+			if err := a.writeThreadMetadata("private_archived", thread); err != nil {
+				return err
+			}
+			if err := a.archiveChannel(thread); err != nil {
+				log.Printf("archive private archived thread %s (%s): %v", thread.Name, thread.ID, err)
+			}
+		}
+		if !threads.HasMore {
+			return nil
+		}
+
+		before = oldestArchiveTimestamp(threads.Threads)
+		if before == nil {
+			return nil
+		}
+	}
+}
+
+func oldestArchiveTimestamp(threads []*discordgo.Channel) *time.Time {
+	var oldest *time.Time
+	for _, thread := range threads {
+		if thread == nil || thread.ThreadMetadata == nil || thread.ThreadMetadata.ArchiveTimestamp.IsZero() {
+			continue
+		}
+
+		timestamp := thread.ThreadMetadata.ArchiveTimestamp
+		if oldest == nil || timestamp.Before(*oldest) {
+			oldest = &timestamp
+		}
+	}
+	return oldest
+}
