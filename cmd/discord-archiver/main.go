@@ -79,8 +79,8 @@ func main() {
 	}
 
 	var (
-		token          = flag.String("token", os.Getenv("DISCORD_BOT_TOKEN"), "Discord bot token. Defaults to DISCORD_BOT_TOKEN.")
-		guildID        = flag.String("guild", os.Getenv("DISCORD_GUILD_ID"), "Discord guild/server ID. Defaults to DISCORD_GUILD_ID.")
+		token          = flag.String("token", "", "Discord bot token. Defaults to DISCORD_BOT_TOKEN.")
+		guildID        = flag.String("guild", "", "Discord guild/server ID. Defaults to DISCORD_GUILD_ID.")
 		outputDir      = flag.String("out-dir", "archive", "Output archive directory path.")
 		date           = flag.String("date", "", "JST date to refresh in YYYY-MM-DD format. When omitted, archives all visible history.")
 		includeThreads = flag.Bool("threads", true, "Include active and archived threads.")
@@ -88,9 +88,19 @@ func main() {
 	)
 	flag.Parse()
 
-	if err := run(*token, *guildID, *outputDir, *date, *includeThreads, !*excludePrivate); err != nil {
+	resolvedToken := valueOrEnv(*token, "DISCORD_BOT_TOKEN")
+	resolvedGuildID := valueOrEnv(*guildID, "DISCORD_GUILD_ID")
+
+	if err := run(resolvedToken, resolvedGuildID, *outputDir, *date, *includeThreads, !*excludePrivate); err != nil {
 		log.Fatal(err)
 	}
+}
+
+func valueOrEnv(value, envName string) string {
+	if value != "" {
+		return value
+	}
+	return os.Getenv(envName)
 }
 
 func loadDotEnv(path string) error {
