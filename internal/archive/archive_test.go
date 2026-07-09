@@ -314,6 +314,7 @@ type fakeDiscordClient struct {
 
 	mu            sync.Mutex
 	downloadCalls []string
+	messageCalls  map[string]int
 }
 
 func (c *fakeDiscordClient) GuildChannels(guildID string) ([]*discordgo.Channel, error) {
@@ -332,11 +333,25 @@ func (c *fakeDiscordClient) ThreadsPrivateArchived(channelID string, before *tim
 	return &discordgo.ThreadsList{}, nil
 }
 
+// ChannelMessages returns the channel's fixed message set on its first call
+// and an empty page thereafter, regardless of beforeID. Real pagination
+// depends on beforeID reflecting message order, which these fakes' string
+// IDs don't; tests that need multi-page behavior fake ChannelMessages
+// themselves.
 func (c *fakeDiscordClient) ChannelMessages(channelID string, limit int, beforeID string) ([]*discordgo.Message, error) {
 	if err := c.failChannels[channelID]; err != nil {
 		return nil, err
 	}
-	if beforeID != "" {
+
+	c.mu.Lock()
+	if c.messageCalls == nil {
+		c.messageCalls = make(map[string]int)
+	}
+	call := c.messageCalls[channelID]
+	c.messageCalls[channelID]++
+	c.mu.Unlock()
+
+	if call > 0 {
 		return nil, nil
 	}
 	return c.messages[channelID], nil

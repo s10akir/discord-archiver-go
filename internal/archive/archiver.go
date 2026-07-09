@@ -75,6 +75,12 @@ func (a *archiver) archiveChannel(channel *discordgo.Channel) error {
 	log.Printf("archiving channel %s (%s)", channel.Name, channel.ID)
 
 	var beforeID string
+	if a.dateFilter != nil {
+		// Seek straight to the filtered date instead of paging from the
+		// channel's newest message; shouldArchiveMessage below still stops
+		// once messages fall before dateFilter.Start.
+		beforeID = a.dateFilter.SeekBeforeID
+	}
 	for {
 		messages, err := a.client.ChannelMessages(channel.ID, 100, beforeID)
 		if err != nil {
