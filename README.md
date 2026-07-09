@@ -13,16 +13,43 @@ DISCORD_BOT_TOKEN=your-bot-token
 DISCORD_GUILD_ID=your-guild-id
 ```
 
-全期間を取得する場合:
+オプション無しで起動するとデーモンとして常駐します。デフォルトでは起動直後にスケジュール用タイムゾーン基準の前日分をdumpし、その後は毎日指定時刻に前日分をdumpします。
 
 ```bash
 go run ./cmd/discord-archiver -out-dir archive
 ```
 
-指定したJST日付だけを洗い替える場合:
+実行時刻とタイムゾーンは環境変数またはフラグで指定できます。フラグの指定が環境変数より優先されます。
+
+```dotenv
+TZ=Asia/Tokyo
+DISCORD_ARCHIVER_SCHEDULE_TIME=03:00
+DISCORD_ARCHIVER_RUN_ON_START=true
+```
 
 ```bash
-go run ./cmd/discord-archiver -out-dir archive -date 2026-07-09
+go run ./cmd/discord-archiver \
+  -out-dir archive \
+  -schedule-time 03:00 \
+  -timezone Asia/Tokyo
+```
+
+起動直後の前日分dumpを回避する場合は `-no-run-on-start` を付けるか、`DISCORD_ARCHIVER_RUN_ON_START=false` を設定します。
+
+```bash
+go run ./cmd/discord-archiver -out-dir archive -no-run-on-start
+```
+
+手動で全期間を取得する場合:
+
+```bash
+go run ./cmd/discord-archiver dump -all -out-dir archive
+```
+
+手動で指定したJST日付だけを洗い替える場合:
+
+```bash
+go run ./cmd/discord-archiver dump -date 2026-07-09 -out-dir archive
 ```
 
 フラグでもBot tokenとguild IDを指定できます。
@@ -39,6 +66,23 @@ go run ./cmd/discord-archiver \
 ```bash
 go run ./cmd/discord-archiver -out-dir archive -no-private-threads
 ```
+
+## Docker
+
+イメージをビルドして起動すると、コンテナ内でデーモンとして常駐します。
+
+```bash
+docker build -t discord-archiver .
+docker run --rm \
+  -e DISCORD_BOT_TOKEN \
+  -e DISCORD_GUILD_ID \
+  -e TZ=Asia/Tokyo \
+  -e DISCORD_ARCHIVER_SCHEDULE_TIME=03:00 \
+  -v "$PWD/archive:/data/archive" \
+  discord-archiver -out-dir /data/archive
+```
+
+`docker-compose.yml.example` も同じ設定例です。
 
 ## Output
 

@@ -1,0 +1,13 @@
+services:
+  discord-archiver:
+    build: .
+    restart: unless-stopped
+    environment:
+      DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN}
+      DISCORD_GUILD_ID: ${DISCORD_GUILD_ID}
+      TZ: Asia/Tokyo
+      DISCORD_ARCHIVER_SCHEDULE_TIME: "03:00"
+      DISCORD_ARCHIVER_RUN_ON_START: "true"
+    volumes:
+      - ./archive:/data/archive
+    command: ["-out-dir", "/data/archive"]

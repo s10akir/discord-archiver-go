@@ -41,6 +41,157 @@ func TestParseDateFilterUsesJSTDay(t *testing.T) {
 	}
 }
 
+func TestParseCommandDefaultsToDaemon(t *testing.T) {
+	config, err := parseCommand(nil, testEnv(map[string]string{
+		"DISCORD_BOT_TOKEN": "token1",
+		"DISCORD_GUILD_ID":  "guild1",
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.mode != commandDaemon {
+		t.Fatalf("mode = %q, want %q", config.mode, commandDaemon)
+	}
+	if !config.runOnStart {
+		t.Fatal("runOnStart = false, want true")
+	}
+	if config.scheduleTime != defaultScheduleTime {
+		t.Fatalf("scheduleTime = %q, want %q", config.scheduleTime, defaultScheduleTime)
+	}
+	if config.timezone != jstLocation {
+		t.Fatalf("timezone = %q, want %q", config.timezone, jstLocation)
+	}
+	if config.archive.token != "token1" || config.archive.guildID != "guild1" {
+		t.Fatalf("archive credentials not resolved: %#v", config.archive)
+	}
+}
+
+func TestParseCommandDaemonFlagsOverrideEnv(t *testing.T) {
+	config, err := parseCommand([]string{
+		"daemon",
+		"-schedule-time", "04:30",
+		"-timezone", "UTC",
+		"-run-on-start=true",
+		"-no-private-threads",
+	}, testEnv(map[string]string{
+		"DISCORD_ARCHIVER_SCHEDULE_TIME": "03:00",
+		"DISCORD_ARCHIVER_RUN_ON_START":  "false",
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.scheduleTime != "04:30" {
+		t.Fatalf("scheduleTime = %q, want %q", config.scheduleTime, "04:30")
+	}
+	if config.timezone != "UTC" {
+		t.Fatalf("timezone = %q, want %q", config.timezone, "UTC")
+	}
+	if !config.runOnStart {
+		t.Fatal("runOnStart = false, want true")
+	}
+	if config.archive.includePrivate {
+		t.Fatal("includePrivate = true, want false")
+	}
+}
+
+func TestParseCommandNoRunOnStart(t *testing.T) {
+	config, err := parseCommand([]string{"-no-run-on-start"}, testEnv(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.runOnStart {
+		t.Fatal("runOnStart = true, want false")
+	}
+}
+
+func TestParseCommandDumpAll(t *testing.T) {
+	config, err := parseCommand([]string{"dump", "-all"}, testEnv(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.mode != commandDump {
+		t.Fatalf("mode = %q, want %q", config.mode, commandDump)
+	}
+	if config.date != "" {
+		t.Fatalf("date = %q, want empty", config.date)
+	}
+}
+
+func TestParseCommandDumpDate(t *testing.T) {
+	config, err := parseCommand([]string{"dump", "-date", "2026-07-09"}, testEnv(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.mode != commandDump {
+		t.Fatalf("mode = %q, want %q", config.mode, commandDump)
+	}
+	if config.date != "2026-07-09" {
+		t.Fatalf("date = %q, want %q", config.date, "2026-07-09")
+	}
+}
+
+func TestParseCommandDumpRequiresAllOrDate(t *testing.T) {
+	if _, err := parseCommand([]string{"dump"}, testEnv(nil)); err == nil {
+		t.Fatal("parseCommand dump without target succeeded, want error")
+	}
+	if _, err := parseCommand([]string{"dump", "-all", "-date", "2026-07-09"}, testEnv(nil)); err == nil {
+		t.Fatal("parseCommand dump with all and date succeeded, want error")
+	}
+}
+
+func TestParseScheduleClock(t *testing.T) {
+	clock, err := parseScheduleClock("03:05")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if clock.hour != 3 || clock.minute != 5 {
+		t.Fatalf("clock = %#v, want 03:05", clock)
+	}
+
+	for _, value := range []string{"", "3", "24:00", "03:60", "aa:00"} {
+		if _, err := parseScheduleClock(value); err == nil {
+			t.Fatalf("parseScheduleClock(%q) succeeded, want error", value)
+		}
+	}
+}
+
+func TestNextScheduledTime(t *testing.T) {
+	loc, err := time.LoadLocation(jstLocation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	schedule := scheduleClock{hour: 3}
+
+	now := time.Date(2026, 7, 9, 2, 0, 0, 0, loc)
+	want := time.Date(2026, 7, 9, 3, 0, 0, 0, loc)
+	if got := nextScheduledTime(now, schedule, loc); !got.Equal(want) {
+		t.Fatalf("nextScheduledTime before schedule = %s, want %s", got, want)
+	}
+
+	now = time.Date(2026, 7, 9, 3, 0, 0, 0, loc)
+	want = time.Date(2026, 7, 10, 3, 0, 0, 0, loc)
+	if got := nextScheduledTime(now, schedule, loc); !got.Equal(want) {
+		t.Fatalf("nextScheduledTime at schedule = %s, want %s", got, want)
+	}
+}
+
+func TestPreviousDateUsesScheduleTimezone(t *testing.T) {
+	loc, err := time.LoadLocation(jstLocation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 7, 9, 0, 30, 0, 0, loc)
+	if got := previousDate(now, loc); got != "2026-07-08" {
+		t.Fatalf("previousDate() = %q, want %q", got, "2026-07-08")
+	}
+}
+
+func testEnv(values map[string]string) func(string) string {
+	return func(key string) string {
+		return values[key]
+	}
+}
+
 func TestChannelMessagesCompatDecodeIgnoresUnknownComponentTypes(t *testing.T) {
 	body := []byte(`[
 		{

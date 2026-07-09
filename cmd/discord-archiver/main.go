@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -9,15 +10,44 @@ import (
 	"log"
 	"net/url"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/bwmarrin/discordgo"
 )
 
 const jstLocation = "Asia/Tokyo"
+const defaultScheduleTime = "03:00"
+
+type commandMode string
+
+const (
+	commandDaemon commandMode = "daemon"
+	commandDump   commandMode = "dump"
+)
+
+type archiveConfig struct {
+	token          string
+	guildID        string
+	outputDir      string
+	includeThreads bool
+	includePrivate bool
+	excludePrivate bool
+}
+
+type commandConfig struct {
+	mode         commandMode
+	archive      archiveConfig
+	date         string
+	scheduleTime string
+	timezone     string
+	runOnStart   bool
+	noRunOnStart bool
+}
 
 type archiveRecord struct {
 	GuildID     string                `json:"guild_id"`
@@ -78,22 +108,199 @@ func main() {
 		log.Fatal(err)
 	}
 
-	var (
-		token          = flag.String("token", "", "Discord bot token. Defaults to DISCORD_BOT_TOKEN.")
-		guildID        = flag.String("guild", "", "Discord guild/server ID. Defaults to DISCORD_GUILD_ID.")
-		outputDir      = flag.String("out-dir", "archive", "Output archive directory path.")
-		date           = flag.String("date", "", "JST date to refresh in YYYY-MM-DD format. When omitted, archives all visible history.")
-		includeThreads = flag.Bool("threads", true, "Include active and archived threads.")
-		excludePrivate = flag.Bool("no-private-threads", false, "Exclude private archived threads visible to the bot.")
-	)
-	flag.Parse()
-
-	resolvedToken := valueOrEnv(*token, "DISCORD_BOT_TOKEN")
-	resolvedGuildID := valueOrEnv(*guildID, "DISCORD_GUILD_ID")
-
-	if err := run(resolvedToken, resolvedGuildID, *outputDir, *date, *includeThreads, !*excludePrivate); err != nil {
+	config, err := parseCommand(os.Args[1:], os.Getenv)
+	if err != nil {
 		log.Fatal(err)
 	}
+
+	if err := executeCommand(config); err != nil {
+		log.Fatal(err)
+	}
+}
+
+func parseCommand(args []string, getenv func(string) string) (commandConfig, error) {
+	mode := commandDaemon
+	if len(args) > 0 {
+		switch args[0] {
+		case "daemon":
+			args = args[1:]
+		case "dump":
+			mode = commandDump
+			args = args[1:]
+		}
+	}
+
+	config := commandConfig{
+		mode:         mode,
+		scheduleTime: valueOrDefault(getenv("DISCORD_ARCHIVER_SCHEDULE_TIME"), defaultScheduleTime),
+		timezone:     valueOrDefault(getenv("TZ"), jstLocation),
+		runOnStart:   envBoolDefault(getenv("DISCORD_ARCHIVER_RUN_ON_START"), true),
+	}
+
+	flags := flag.NewFlagSet("discord-archiver", flag.ContinueOnError)
+	flags.SetOutput(os.Stderr)
+	addArchiveFlags(flags, &config.archive)
+
+	switch mode {
+	case commandDaemon:
+		flags.StringVar(&config.scheduleTime, "schedule-time", config.scheduleTime, "Daily archive time in HH:MM.")
+		flags.StringVar(&config.timezone, "timezone", config.timezone, "Schedule timezone IANA name.")
+		flags.BoolVar(&config.runOnStart, "run-on-start", config.runOnStart, "Run yesterday archive immediately on daemon start.")
+		flags.BoolVar(&config.noRunOnStart, "no-run-on-start", false, "Skip the immediate archive on daemon start.")
+	case commandDump:
+		var all bool
+		flags.BoolVar(&all, "all", false, "Archive all visible history.")
+		flags.StringVar(&config.date, "date", "", "JST date to refresh in YYYY-MM-DD format.")
+		if err := flags.Parse(args); err != nil {
+			return commandConfig{}, err
+		}
+		if all == (strings.TrimSpace(config.date) != "") {
+			return commandConfig{}, errors.New("dump requires exactly one of -all or -date")
+		}
+		if flags.NArg() > 0 {
+			return commandConfig{}, fmt.Errorf("unexpected argument %q", flags.Arg(0))
+		}
+		resolveArchiveConfig(&config.archive, getenv)
+		return config, nil
+	default:
+		return commandConfig{}, fmt.Errorf("unknown command mode %q", mode)
+	}
+
+	if err := flags.Parse(args); err != nil {
+		return commandConfig{}, err
+	}
+	if flags.NArg() > 0 {
+		return commandConfig{}, fmt.Errorf("unexpected argument %q", flags.Arg(0))
+	}
+	if config.noRunOnStart {
+		config.runOnStart = false
+	}
+	resolveArchiveConfig(&config.archive, getenv)
+	if _, err := parseScheduleClock(config.scheduleTime); err != nil {
+		return commandConfig{}, err
+	}
+	if _, err := time.LoadLocation(config.timezone); err != nil {
+		return commandConfig{}, fmt.Errorf("load schedule timezone %q: %w", config.timezone, err)
+	}
+	return config, nil
+}
+
+func addArchiveFlags(flags *flag.FlagSet, config *archiveConfig) {
+	flags.StringVar(&config.token, "token", "", "Discord bot token. Defaults to DISCORD_BOT_TOKEN.")
+	flags.StringVar(&config.guildID, "guild", "", "Discord guild/server ID. Defaults to DISCORD_GUILD_ID.")
+	flags.StringVar(&config.outputDir, "out-dir", "archive", "Output archive directory path.")
+	flags.BoolVar(&config.includeThreads, "threads", true, "Include active and archived threads.")
+	flags.BoolVar(&config.excludePrivate, "no-private-threads", false, "Exclude private archived threads visible to the bot.")
+}
+
+func resolveArchiveConfig(config *archiveConfig, getenv func(string) string) {
+	config.token = valueOrDefault(config.token, getenv("DISCORD_BOT_TOKEN"))
+	config.guildID = valueOrDefault(config.guildID, getenv("DISCORD_GUILD_ID"))
+	config.includePrivate = !config.excludePrivate
+}
+
+func executeCommand(config commandConfig) error {
+	switch config.mode {
+	case commandDaemon:
+		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		defer stop()
+		return runDaemon(ctx, config)
+	case commandDump:
+		return runArchive(config.archive, config.date)
+	default:
+		return fmt.Errorf("unknown command mode %q", config.mode)
+	}
+}
+
+func runArchive(config archiveConfig, date string) error {
+	return run(config.token, config.guildID, config.outputDir, date, config.includeThreads, config.includePrivate)
+}
+
+func validateArchiveConfig(config archiveConfig) error {
+	if config.token == "" {
+		return errors.New("missing Discord bot token: set DISCORD_BOT_TOKEN or pass -token")
+	}
+	if config.guildID == "" {
+		return errors.New("missing Discord guild ID: set DISCORD_GUILD_ID or pass -guild")
+	}
+	return nil
+}
+
+func runDaemon(ctx context.Context, config commandConfig) error {
+	if err := validateArchiveConfig(config.archive); err != nil {
+		return err
+	}
+
+	loc, err := time.LoadLocation(config.timezone)
+	if err != nil {
+		return fmt.Errorf("load schedule timezone %q: %w", config.timezone, err)
+	}
+	schedule, err := parseScheduleClock(config.scheduleTime)
+	if err != nil {
+		return err
+	}
+
+	if config.runOnStart {
+		runScheduledArchive(config.archive, previousDate(time.Now().In(loc), loc))
+	}
+
+	for {
+		next := nextScheduledTime(time.Now().In(loc), schedule, loc)
+		log.Printf("next scheduled archive at %s", next.Format(time.RFC3339))
+		timer := time.NewTimer(time.Until(next))
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return nil
+		case <-timer.C:
+			runScheduledArchive(config.archive, previousDate(time.Now().In(loc), loc))
+		}
+	}
+}
+
+func runScheduledArchive(config archiveConfig, date string) {
+	log.Printf("starting scheduled archive for %s", date)
+	if err := runArchive(config, date); err != nil {
+		log.Printf("scheduled archive for %s failed: %v", date, err)
+		return
+	}
+	log.Printf("finished scheduled archive for %s", date)
+}
+
+type scheduleClock struct {
+	hour   int
+	minute int
+}
+
+func parseScheduleClock(value string) (scheduleClock, error) {
+	parts := strings.Split(strings.TrimSpace(value), ":")
+	if len(parts) != 2 {
+		return scheduleClock{}, fmt.Errorf("parse schedule time %q: expected HH:MM", value)
+	}
+	hour, err := strconv.Atoi(parts[0])
+	if err != nil {
+		return scheduleClock{}, fmt.Errorf("parse schedule hour %q: %w", parts[0], err)
+	}
+	minute, err := strconv.Atoi(parts[1])
+	if err != nil {
+		return scheduleClock{}, fmt.Errorf("parse schedule minute %q: %w", parts[1], err)
+	}
+	if hour < 0 || hour > 23 || minute < 0 || minute > 59 {
+		return scheduleClock{}, fmt.Errorf("parse schedule time %q: expected HH:MM in 24-hour time", value)
+	}
+	return scheduleClock{hour: hour, minute: minute}, nil
+}
+
+func nextScheduledTime(now time.Time, schedule scheduleClock, loc *time.Location) time.Time {
+	next := time.Date(now.Year(), now.Month(), now.Day(), schedule.hour, schedule.minute, 0, 0, loc)
+	if !next.After(now) {
+		next = next.AddDate(0, 0, 1)
+	}
+	return next
+}
+
+func previousDate(now time.Time, loc *time.Location) string {
+	return now.In(loc).AddDate(0, 0, -1).Format("2006-01-02")
 }
 
 func valueOrEnv(value, envName string) string {
@@ -101,6 +308,26 @@ func valueOrEnv(value, envName string) string {
 		return value
 	}
 	return os.Getenv(envName)
+}
+
+func valueOrDefault(value, fallback string) string {
+	if strings.TrimSpace(value) == "" {
+		return fallback
+	}
+	return value
+}
+
+func envBoolDefault(value string, fallback bool) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "":
+		return fallback
+	case "1", "true", "t", "yes", "y", "on":
+		return true
+	case "0", "false", "f", "no", "n", "off":
+		return false
+	default:
+		return fallback
+	}
 }
 
 func loadDotEnv(path string) error {
