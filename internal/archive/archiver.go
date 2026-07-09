@@ -10,15 +10,17 @@ import (
 )
 
 type archiver struct {
-	client             discordClient
-	guildID            string
-	includePrivate     bool
-	partitionLocation  *time.Location
-	dateFilter         *dateFilter
-	output             archiveWriter
-	seenChannels       map[string]struct{}
-	seenThreadMetadata map[string]struct{}
-	failures           []error
+	client              discordClient
+	guildID             string
+	includePrivate      bool
+	downloadAttachments bool
+	partitionLocation   *time.Location
+	dateFilter          *dateFilter
+	output              archiveWriter
+	attachments         *attachmentPool
+	seenChannels        map[string]struct{}
+	seenThreadMetadata  map[string]struct{}
+	failures            []error
 }
 
 // fail records a per-channel/per-thread failure and lets the pass continue;
@@ -103,6 +105,7 @@ func (a *archiver) archiveChannel(channel *discordgo.Channel) error {
 			if err := a.output.WriteMessage(date, channel.ID, record); err != nil {
 				return err
 			}
+			a.queueAttachments(date, channel.ID, message)
 		}
 
 		if stopChannel {

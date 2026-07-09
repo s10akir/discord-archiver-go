@@ -67,6 +67,12 @@ go run ./cmd/discord-archiver \
 go run ./cmd/discord-archiver -out-dir archive -no-private-threads
 ```
 
+デフォルトではメッセージの添付ファイルも実体をダウンロードして保存します。再実行時、既に同じサイズのファイルが保存済みであれば再ダウンロードしません。取得しない場合は `-attachments=false` を付けるか、`DISCORD_ARCHIVER_DOWNLOAD_ATTACHMENTS=false` を設定します。
+
+```bash
+go run ./cmd/discord-archiver -out-dir archive -attachments=false
+```
+
 ## Docker
 
 イメージをビルドして起動すると、コンテナ内でデーモンとして常駐します。
@@ -98,8 +104,11 @@ archive/
       date=2026-07-09/
         channel_id=817806841718243361/
           messages.jsonl
+          attachments/
+            <message_id>/
+              <attachment_id>-<filename>
 ```
 
 `date=YYYY-MM-DD` はJST基準のメッセージ作成日です。JSONL内の `message.timestamp` はdiscordgoが受け取ったDiscord APIの値をそのまま保存します。
 
-`messages.jsonl` は1メッセージ1行です。各行には `guild_id`、`channel_id`、`channel_name`、`channel_type`、`parent_id`、discordgoの `message` オブジェクトが入ります。
+`messages.jsonl` は1メッセージ1行です。各行には `guild_id`、`channel_id`、`channel_name`、`channel_type`、`parent_id`、discordgoの `message` オブジェクトが入ります。添付ファイルの実体は同じ行の `message.attachments` にあるIDとファイル名から `attachments/<message_id>/<attachment_id>-<filename>` として組み立てられるパスに保存されます。

@@ -13,11 +13,12 @@ const DefaultLocation = "Asia/Tokyo"
 
 // Config holds everything needed to run one archive pass.
 type Config struct {
-	Token          string
-	GuildID        string
-	OutputDir      string
-	IncludeThreads bool
-	IncludePrivate bool
+	Token               string
+	GuildID             string
+	OutputDir           string
+	IncludeThreads      bool
+	IncludePrivate      bool
+	DownloadAttachments bool
 }
 
 func (c Config) Validate() error {
@@ -68,14 +69,16 @@ func Run(config Config, date string) error {
 // abort the rest, but any failure makes the whole pass return an error.
 func runArchive(client discordClient, output archiveWriter, config Config, filter *dateFilter, partitionLocation *time.Location) error {
 	a := &archiver{
-		client:             client,
-		guildID:            config.GuildID,
-		includePrivate:     config.IncludePrivate,
-		partitionLocation:  partitionLocation,
-		dateFilter:         filter,
-		output:             output,
-		seenChannels:       make(map[string]struct{}),
-		seenThreadMetadata: make(map[string]struct{}),
+		client:              client,
+		guildID:             config.GuildID,
+		includePrivate:      config.IncludePrivate,
+		downloadAttachments: config.DownloadAttachments,
+		partitionLocation:   partitionLocation,
+		dateFilter:          filter,
+		output:              output,
+		attachments:         newAttachmentPool(),
+		seenChannels:        make(map[string]struct{}),
+		seenThreadMetadata:  make(map[string]struct{}),
 	}
 
 	channels, err := client.GuildChannels(config.GuildID)
@@ -101,7 +104,7 @@ func runArchive(client discordClient, output archiveWriter, config Config, filte
 		a.archiveThreads(channels)
 	}
 
-	failures := a.failures
+	failures := append(a.failures, a.attachments.wait()...)
 	if err := output.Close(); err != nil {
 		// Staged files may be truncated; do not publish them.
 		failures = append(failures, err)

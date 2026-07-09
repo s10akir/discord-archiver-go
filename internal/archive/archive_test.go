@@ -1,12 +1,15 @@
 package archive
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -303,9 +306,14 @@ func TestNewArchiveOutputRemovesStaleTempEntries(t *testing.T) {
 }
 
 type fakeDiscordClient struct {
-	channels     []*discordgo.Channel
-	messages     map[string][]*discordgo.Message
-	failChannels map[string]error
+	channels       []*discordgo.Channel
+	messages       map[string][]*discordgo.Message
+	failChannels   map[string]error
+	attachmentData map[string][]byte
+	attachmentErrs map[string]error
+
+	mu            sync.Mutex
+	downloadCalls []string
 }
 
 func (c *fakeDiscordClient) GuildChannels(guildID string) ([]*discordgo.Channel, error) {
@@ -332,6 +340,17 @@ func (c *fakeDiscordClient) ChannelMessages(channelID string, limit int, beforeI
 		return nil, nil
 	}
 	return c.messages[channelID], nil
+}
+
+func (c *fakeDiscordClient) DownloadAttachment(url string) (io.ReadCloser, error) {
+	c.mu.Lock()
+	c.downloadCalls = append(c.downloadCalls, url)
+	c.mu.Unlock()
+
+	if err := c.attachmentErrs[url]; err != nil {
+		return nil, err
+	}
+	return io.NopCloser(bytes.NewReader(c.attachmentData[url])), nil
 }
 
 func (c *fakeDiscordClient) Close() error { return nil }
@@ -382,5 +401,150 @@ func TestRunArchiveCollectsChannelFailures(t *testing.T) {
 	metadataPath := filepath.Join(root, "guild_id=guild1", "metadata", "channels.jsonl")
 	if _, err := os.Stat(metadataPath); err != nil {
 		t.Fatalf("channel metadata not committed: %v", err)
+	}
+}
+
+func TestRunArchiveDownloadsAttachments(t *testing.T) {
+	root := t.TempDir()
+	loc, err := time.LoadLocation(DefaultLocation)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	client := &fakeDiscordClient{
+		channels: []*discordgo.Channel{{ID: "chan", Name: "general", Type: discordgo.ChannelTypeGuildText}},
+		messages: map[string][]*discordgo.Message{
+			"chan": {{
+				ID:        "message1",
+				ChannelID: "chan",
+				Timestamp: time.Date(2026, 7, 8, 15, 0, 0, 0, time.UTC),
+				Attachments: []*discordgo.MessageAttachment{
+					{ID: "att1", Filename: "photo.png", Size: 5, URL: "https://cdn.example/att1"},
+				},
+			}},
+		},
+		attachmentData: map[string][]byte{"https://cdn.example/att1": []byte("hello")},
+	}
+
+	output, err := newArchiveOutput(root, "guild1", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer output.Cleanup()
+
+	config := Config{Token: "token", GuildID: "guild1", OutputDir: root, DownloadAttachments: true}
+	if err := runArchive(client, output, config, nil, loc); err != nil {
+		t.Fatal(err)
+	}
+
+	path := filepath.Join(root, "guild_id=guild1", "messages", "date=2026-07-09", "channel_id=chan", "attachments", "message1", "att1-photo.png")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("attachment not written: %v", err)
+	}
+	if string(data) != "hello" {
+		t.Fatalf("attachment content = %q, want %q", data, "hello")
+	}
+}
+
+func TestRunArchiveSkipsUpToDateAttachmentOnDateRerun(t *testing.T) {
+	root := t.TempDir()
+	loc, err := time.LoadLocation(DefaultLocation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	filter, err := parseDateFilter("2026-07-09", loc)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	existing := filepath.Join(root, "guild_id=guild1", "messages", "date=2026-07-09", "channel_id=chan", "attachments", "message1", "att1-photo.png")
+	if err := os.MkdirAll(filepath.Dir(existing), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(existing, []byte("hello"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	client := &fakeDiscordClient{
+		channels: []*discordgo.Channel{{ID: "chan", Name: "general", Type: discordgo.ChannelTypeGuildText}},
+		messages: map[string][]*discordgo.Message{
+			"chan": {{
+				ID:        "message1",
+				ChannelID: "chan",
+				Timestamp: time.Date(2026, 7, 9, 1, 0, 0, 0, time.UTC),
+				Attachments: []*discordgo.MessageAttachment{
+					{ID: "att1", Filename: "photo.png", Size: 5, URL: "https://cdn.example/att1"},
+				},
+			}},
+		},
+		attachmentErrs: map[string]error{"https://cdn.example/att1": errors.New("should not be called")},
+	}
+
+	output, err := newArchiveOutput(root, "guild1", filter)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer output.Cleanup()
+
+	config := Config{Token: "token", GuildID: "guild1", OutputDir: root, DownloadAttachments: true}
+	if err := runArchive(client, output, config, filter, loc); err != nil {
+		t.Fatal(err)
+	}
+
+	if len(client.downloadCalls) != 0 {
+		t.Fatalf("DownloadAttachment called %d times, want 0", len(client.downloadCalls))
+	}
+	data, err := os.ReadFile(existing)
+	if err != nil {
+		t.Fatalf("attachment missing after rerun: %v", err)
+	}
+	if string(data) != "hello" {
+		t.Fatalf("attachment content = %q, want %q", data, "hello")
+	}
+}
+
+func TestRunArchiveAttachmentDownloadFailureIsSoftFailure(t *testing.T) {
+	root := t.TempDir()
+	loc, err := time.LoadLocation(DefaultLocation)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	client := &fakeDiscordClient{
+		channels: []*discordgo.Channel{{ID: "chan", Name: "general", Type: discordgo.ChannelTypeGuildText}},
+		messages: map[string][]*discordgo.Message{
+			"chan": {{
+				ID:        "message1",
+				ChannelID: "chan",
+				Content:   "hello",
+				Timestamp: time.Date(2026, 7, 8, 15, 0, 0, 0, time.UTC),
+				Attachments: []*discordgo.MessageAttachment{
+					{ID: "att1", Filename: "photo.png", Size: 5, URL: "https://cdn.example/att1"},
+				},
+			}},
+		},
+		attachmentErrs: map[string]error{"https://cdn.example/att1": errors.New("boom")},
+	}
+
+	output, err := newArchiveOutput(root, "guild1", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer output.Cleanup()
+
+	config := Config{Token: "token", GuildID: "guild1", OutputDir: root, DownloadAttachments: true}
+	err = runArchive(client, output, config, nil, loc)
+	if err == nil || !strings.Contains(err.Error(), "boom") {
+		t.Fatalf("runArchive() error = %v, want error containing %q", err, "boom")
+	}
+
+	messagePath := filepath.Join(root, "guild_id=guild1", "messages", "date=2026-07-09", "channel_id=chan", "messages.jsonl")
+	data, err := os.ReadFile(messagePath)
+	if err != nil {
+		t.Fatalf("message not written despite attachment failure: %v", err)
+	}
+	if !strings.Contains(string(data), "hello") {
+		t.Fatalf("message content missing: %q", data)
 	}
 }

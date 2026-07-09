@@ -46,6 +46,9 @@ func Parse(args []string, getenv func(string) string) (Config, error) {
 
 	config := Config{
 		Mode: mode,
+		Archive: archive.Config{
+			DownloadAttachments: envBoolDefault(getenv("DISCORD_ARCHIVER_DOWNLOAD_ATTACHMENTS"), true),
+		},
 		Schedule: scheduler.Config{
 			Time:       valueOrDefault(getenv("DISCORD_ARCHIVER_SCHEDULE_TIME"), defaultScheduleTime),
 			Timezone:   valueOrDefault(getenv("TZ"), archive.DefaultLocation),
@@ -106,6 +109,7 @@ func addArchiveFlags(flags *flag.FlagSet, config *archive.Config) (excludePrivat
 	flags.StringVar(&config.GuildID, "guild", "", "Discord guild/server ID. Defaults to DISCORD_GUILD_ID.")
 	flags.StringVar(&config.OutputDir, "out-dir", "archive", "Output archive directory path.")
 	flags.BoolVar(&config.IncludeThreads, "threads", true, "Include active and archived threads.")
+	flags.BoolVar(&config.DownloadAttachments, "attachments", config.DownloadAttachments, "Download message attachments alongside their JSON records.")
 	return flags.Bool("no-private-threads", false, "Exclude private archived threads visible to the bot.")
 }
 

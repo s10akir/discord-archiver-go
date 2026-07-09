@@ -4,12 +4,15 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strconv"
 	"time"
+
+	"github.com/bwmarrin/discordgo"
 )
 
 // archiveWriter is the output-side boundary: where archived records go.
@@ -20,6 +23,15 @@ type archiveWriter interface {
 	WriteChannelMetadata(record channelRecord) error
 	WriteThreadMetadata(record threadRecord) error
 	WriteMessage(date, channelID string, record archiveRecord) error
+	// AttachmentUpToDate reports whether a same-size copy of attachment
+	// already exists in the committed archive, reusing it in place (copying
+	// it forward into the staged date partition when one is in play) so a
+	// rerun does not re-download unchanged attachments. It always returns
+	// the path attachment content must be written to when not up to date.
+	AttachmentUpToDate(date, channelID, messageID string, attachment *discordgo.MessageAttachment) (writePath string, upToDate bool)
+	// WriteAttachment writes body to writePath (as returned by
+	// AttachmentUpToDate), creating parent directories as needed.
+	WriteAttachment(writePath string, body io.Reader) error
 	// Close flushes and closes open files. Commit publishes staged output
 	// (temp date partition, temp metadata files) and must only be called
 	// after Close succeeds. Cleanup discards anything left unpublished.
@@ -192,6 +204,74 @@ func (o *archiveOutput) messageFile(date, channelID string) (*jsonFile, error) {
 	}
 	o.messageFiles[path] = file
 	return file, nil
+}
+
+// attachmentFilenamePattern matches characters not safe to embed verbatim in
+// a path component; anything else is replaced with "_".
+var attachmentFilenamePattern = regexp.MustCompile(`[/\\\x00]`)
+
+func sanitizeAttachmentFilename(filename string) string {
+	base := filepath.Base(filename)
+	if base == "" || base == "." || base == string(filepath.Separator) {
+		return "file"
+	}
+	return attachmentFilenamePattern.ReplaceAllString(base, "_")
+}
+
+// attachmentPaths returns the directory an attachment for (date, channelID,
+// messageID) lives in, both in the tree being written this run (dir) and in
+// the currently committed archive (committedDir). The two differ only while
+// date is being staged in a temp directory ahead of an atomic replace.
+func (o *archiveOutput) attachmentPaths(date, channelID, messageID string, attachment *discordgo.MessageAttachment) (writePath, committedPath string) {
+	name := attachment.ID + "-" + sanitizeAttachmentFilename(attachment.Filename)
+
+	if o.dateFilter != nil && date == o.dateFilter.Date {
+		writePath = filepath.Join(o.dateTempDir, "channel_id="+channelID, "attachments", messageID, name)
+		committedPath = filepath.Join(o.dateTargetDir, "channel_id="+channelID, "attachments", messageID, name)
+		return writePath, committedPath
+	}
+
+	writePath = filepath.Join(o.messagesRoot, "date="+date, "channel_id="+channelID, "attachments", messageID, name)
+	return writePath, writePath
+}
+
+func (o *archiveOutput) AttachmentUpToDate(date, channelID, messageID string, attachment *discordgo.MessageAttachment) (writePath string, upToDate bool) {
+	writePath, committedPath := o.attachmentPaths(date, channelID, messageID, attachment)
+
+	info, err := os.Stat(committedPath)
+	if err != nil || info.Size() != int64(attachment.Size) {
+		return writePath, false
+	}
+	if committedPath == writePath {
+		return writePath, true
+	}
+
+	existing, err := os.Open(committedPath)
+	if err != nil {
+		return writePath, false
+	}
+	defer existing.Close()
+	if err := o.WriteAttachment(writePath, existing); err != nil {
+		return writePath, false
+	}
+	return writePath, true
+}
+
+func (o *archiveOutput) WriteAttachment(writePath string, body io.Reader) error {
+	if err := os.MkdirAll(filepath.Dir(writePath), 0o755); err != nil {
+		return fmt.Errorf("create directory for %s: %w", writePath, err)
+	}
+
+	file, err := os.Create(writePath)
+	if err != nil {
+		return fmt.Errorf("create %s: %w", writePath, err)
+	}
+	defer file.Close()
+
+	if _, err := io.Copy(file, body); err != nil {
+		return fmt.Errorf("write %s: %w", writePath, err)
+	}
+	return nil
 }
 
 func newJSONFile(path string) (*jsonFile, error) {
