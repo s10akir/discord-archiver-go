@@ -4,9 +4,24 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"time"
+)
+
+// staleTempMaxAge is how old a leftover temp/backup entry from a crashed run
+// must be before a later run sweeps it. Generous so that a still-running
+// concurrent archive is never deleted.
+const staleTempMaxAge = 24 * time.Hour
+
+// Temp/backup names end in "-<pid>-<unixnano>"; the captured group is the
+// creation time used for the stale check.
+var (
+	staleDateDirPattern      = regexp.MustCompile(`^\.date=\d{4}-\d{2}-\d{2}\.(?:tmp|backup)-\d+-(\d+)$`)
+	staleMetadataFilePattern = regexp.MustCompile(`^\..+\.tmp-\d+-(\d+)$`)
 )
 
 type archiveOutput struct {
@@ -57,6 +72,9 @@ func newArchiveOutput(outputDir, guildID string, filter *dateFilter) (*archiveOu
 		return nil, fmt.Errorf("create messages directory: %w", err)
 	}
 
+	removeStaleTempEntries(output.messagesRoot, staleDateDirPattern)
+	removeStaleTempEntries(output.metadataRoot, staleMetadataFilePattern)
+
 	if filter != nil {
 		output.dateTargetDir = filepath.Join(output.messagesRoot, "date="+filter.Date)
 		output.dateTempDir = filepath.Join(output.messagesRoot, fmt.Sprintf(".date=%s.%s", filter.Date, output.tempSuffix))
@@ -67,6 +85,35 @@ func newArchiveOutput(outputDir, guildID string, filter *dateFilter) (*archiveOu
 	}
 
 	return output, nil
+}
+
+// removeStaleTempEntries deletes temp/backup leftovers from crashed runs.
+// Entries younger than staleTempMaxAge — including everything the current
+// run just created — are kept, so an archive still in progress is safe.
+func removeStaleTempEntries(dir string, pattern *regexp.Regexp) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	for _, entry := range entries {
+		match := pattern.FindStringSubmatch(entry.Name())
+		if match == nil {
+			continue
+		}
+		nanos, err := strconv.ParseInt(match[1], 10, 64)
+		if err != nil {
+			continue
+		}
+		if time.Since(time.Unix(0, nanos)) < staleTempMaxAge {
+			continue
+		}
+		path := filepath.Join(dir, entry.Name())
+		if err := os.RemoveAll(path); err != nil {
+			log.Printf("remove stale temp entry %s: %v", path, err)
+			continue
+		}
+		log.Printf("removed stale temp entry %s", path)
+	}
 }
 
 func (o *archiveOutput) WriteChannelMetadata(record channelRecord) error {

@@ -2,6 +2,7 @@ package archive
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -255,6 +256,46 @@ func TestArchiveOutputCleanupWithoutCommitKeepsOldMetadata(t *testing.T) {
 	for _, entry := range entries {
 		if entry.Name() != "channels.jsonl" {
 			t.Fatalf("leftover metadata temp file: %s", entry.Name())
+		}
+	}
+}
+
+func TestNewArchiveOutputRemovesStaleTempEntries(t *testing.T) {
+	root := t.TempDir()
+	messagesRoot := filepath.Join(root, "guild_id=guild1", "messages")
+	metadataRoot := filepath.Join(root, "guild_id=guild1", "metadata")
+
+	staleNano := time.Now().Add(-48 * time.Hour).UnixNano()
+	freshNano := time.Now().UnixNano()
+	staleTempDir := filepath.Join(messagesRoot, fmt.Sprintf(".date=2026-07-01.tmp-123-%d", staleNano))
+	staleBackupDir := filepath.Join(messagesRoot, fmt.Sprintf(".date=2026-07-01.backup-123-%d", staleNano))
+	freshTempDir := filepath.Join(messagesRoot, fmt.Sprintf(".date=2026-07-01.tmp-456-%d", freshNano))
+	realDateDir := filepath.Join(messagesRoot, "date=2026-07-01")
+	for _, dir := range []string{staleTempDir, staleBackupDir, freshTempDir, realDateDir} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	staleMetadataFile := filepath.Join(metadataRoot, fmt.Sprintf(".channels.jsonl.tmp-123-%d", staleNano))
+	if err := os.MkdirAll(metadataRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(staleMetadataFile, []byte("stale\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := newArchiveOutput(root, "guild1", nil); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, path := range []string{staleTempDir, staleBackupDir, staleMetadataFile} {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("stale entry still exists: %s", path)
+		}
+	}
+	for _, path := range []string{freshTempDir, realDateDir} {
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("non-stale entry removed: %s: %v", path, err)
 		}
 	}
 }
