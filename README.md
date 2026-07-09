@@ -73,6 +73,20 @@ go run ./cmd/discord-archiver -out-dir archive -no-private-threads
 go run ./cmd/discord-archiver -out-dir archive -attachments=false
 ```
 
+## Viewer
+
+アーカイブ済みのデータをブラウザで閲覧する簡易ビューワです。Discord bot tokenは不要で、`-out-dir` のアーカイブディレクトリだけで動作します。
+
+```bash
+go run ./cmd/discord-archiver view -out-dir archive -addr :8080
+```
+
+`http://localhost:8080/` にアクセスすると、ギルド → チャンネル/スレッド → 日付 → メッセージの順にたどれます。メンション・埋め込み・添付ファイル（画像/動画/音声のインライン表示を含む）を簡易的にレンダリングします。添付ファイルの実体はアーカイブディレクトリから直接配信されます。
+
+```dotenv
+DISCORD_ARCHIVER_VIEW_ADDR=:8080
+```
+
 ## Docker
 
 イメージをビルドして起動すると、コンテナ内でデーモンとして常駐します。

@@ -218,6 +218,15 @@ func sanitizeAttachmentFilename(filename string) string {
 	return attachmentFilenamePattern.ReplaceAllString(base, "_")
 }
 
+// AttachmentRelPath returns the path, relative to a guild's root directory,
+// at which an attachment for (date, channelID, messageID) is stored once
+// committed. Consumers that only read the archive (e.g. a viewer) can use it
+// to locate attachment files without duplicating the on-disk layout.
+func AttachmentRelPath(date, channelID, messageID string, attachment *discordgo.MessageAttachment) string {
+	name := attachment.ID + "-" + sanitizeAttachmentFilename(attachment.Filename)
+	return filepath.Join("messages", "date="+date, "channel_id="+channelID, "attachments", messageID, name)
+}
+
 // attachmentPaths returns the directory an attachment for (date, channelID,
 // messageID) lives in, both in the tree being written this run (dir) and in
 // the currently committed archive (committedDir). The two differ only while

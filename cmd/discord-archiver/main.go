@@ -12,6 +12,7 @@ import (
 	"github.com/s10akir/discord-archiver-go/internal/cli"
 	"github.com/s10akir/discord-archiver-go/internal/dotenv"
 	"github.com/s10akir/discord-archiver-go/internal/scheduler"
+	"github.com/s10akir/discord-archiver-go/internal/viewer"
 )
 
 func main() {
@@ -42,6 +43,10 @@ func run(config cli.Config) error {
 		})
 	case cli.ModeDump:
 		return archive.Run(config.Archive, config.Date)
+	case cli.ModeView:
+		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		defer stop()
+		return viewer.Run(ctx, config.Archive.OutputDir, config.ViewAddr)
 	default:
 		return fmt.Errorf("unknown command mode %q", config.Mode)
 	}

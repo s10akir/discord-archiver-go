@@ -15,12 +15,14 @@ import (
 )
 
 const defaultScheduleTime = "03:00"
+const defaultViewAddr = ":8080"
 
 type Mode string
 
 const (
 	ModeDaemon Mode = "daemon"
 	ModeDump   Mode = "dump"
+	ModeView   Mode = "view"
 )
 
 type Config struct {
@@ -28,6 +30,7 @@ type Config struct {
 	Archive  archive.Config
 	Date     string
 	Schedule scheduler.Config
+	ViewAddr string
 }
 
 // Parse builds a Config from args (without the program name) and getenv.
@@ -40,6 +43,9 @@ func Parse(args []string, getenv func(string) string) (Config, error) {
 			args = args[1:]
 		case "dump":
 			mode = ModeDump
+			args = args[1:]
+		case "view":
+			mode = ModeView
 			args = args[1:]
 		}
 	}
@@ -54,10 +60,24 @@ func Parse(args []string, getenv func(string) string) (Config, error) {
 			Timezone:   valueOrDefault(getenv("TZ"), archive.DefaultLocation),
 			RunOnStart: envBoolDefault(getenv("DISCORD_ARCHIVER_RUN_ON_START"), true),
 		},
+		ViewAddr: valueOrDefault(getenv("DISCORD_ARCHIVER_VIEW_ADDR"), defaultViewAddr),
 	}
 
 	flags := flag.NewFlagSet("discord-archiver", flag.ContinueOnError)
 	flags.SetOutput(os.Stderr)
+
+	if mode == ModeView {
+		flags.StringVar(&config.Archive.OutputDir, "out-dir", "archive", "Archive directory to browse.")
+		flags.StringVar(&config.ViewAddr, "addr", config.ViewAddr, "Address to serve the viewer on.")
+		if err := flags.Parse(args); err != nil {
+			return Config{}, err
+		}
+		if flags.NArg() > 0 {
+			return Config{}, fmt.Errorf("unexpected argument %q", flags.Arg(0))
+		}
+		return config, nil
+	}
+
 	excludePrivate := addArchiveFlags(flags, &config.Archive)
 
 	switch mode {

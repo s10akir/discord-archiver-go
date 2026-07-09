@@ -30,6 +30,13 @@ func (a *archiver) fail(err error) {
 	a.failures = append(a.failures, err)
 }
 
+// CanContainMessages reports whether a channel of the given type has its own
+// message history (as opposed to only containing threads, e.g. a category or
+// forum channel).
+func CanContainMessages(channelType discordgo.ChannelType) bool {
+	return canContainMessages(channelType)
+}
+
 func canContainMessages(channelType discordgo.ChannelType) bool {
 	switch channelType {
 	case discordgo.ChannelTypeGuildText,

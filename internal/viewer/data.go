@@ -1,0 +1,251 @@
+// Package viewer serves a read-only browser UI over an archive directory
+// produced by the archive package, without needing a Discord token.
+package viewer
+
+import (
+	"bufio"
+	"encoding/json"
+	"fmt"
+	"net/url"
+	"os"
+	"path/filepath"
+	"regexp"
+	"sort"
+	"strings"
+
+	"github.com/bwmarrin/discordgo"
+	"github.com/s10akir/discord-archiver-go/internal/archive"
+)
+
+// channelMetaLine and threadMetaLine mirror the JSON shape written by
+// archive.archiveOutput (channelRecord/threadRecord); the viewer only reads
+// the archive, so it decodes the format directly rather than importing
+// unexported types.
+type channelMetaLine struct {
+	Channel *discordgo.Channel `json:"channel"`
+}
+
+type threadMetaLine struct {
+	Source string             `json:"source"`
+	Thread *discordgo.Channel `json:"thread"`
+}
+
+type messageLine struct {
+	ChannelID   string             `json:"channel_id"`
+	ChannelName string             `json:"channel_name"`
+	ParentID    string             `json:"parent_id"`
+	Message     *discordgo.Message `json:"message"`
+}
+
+// container is a message-bearing entity: either a regular channel or a
+// thread. Both are stored under messages/date=*/channel_id=<ID>/ the same
+// way, so the viewer treats them uniformly once loaded.
+type container struct {
+	ID       string
+	Name     string
+	Type     discordgo.ChannelType
+	ParentID string
+	IsThread bool
+	Source   string // thread archive source; empty for regular channels
+}
+
+var guildDirPattern = regexp.MustCompile(`^guild_id=(.+)$`)
+
+// listGuilds returns guild IDs found directly under archiveDir.
+func listGuilds(archiveDir string) ([]string, error) {
+	entries, err := os.ReadDir(archiveDir)
+	if err != nil {
+		return nil, fmt.Errorf("read archive directory: %w", err)
+	}
+
+	var guilds []string
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		if match := guildDirPattern.FindStringSubmatch(entry.Name()); match != nil {
+			guilds = append(guilds, match[1])
+		}
+	}
+	sort.Strings(guilds)
+	return guilds, nil
+}
+
+func guildRoot(archiveDir, guildID string) string {
+	return filepath.Join(archiveDir, "guild_id="+guildID)
+}
+
+// loadContainers reads metadata/channels.jsonl and metadata/threads.jsonl.
+// It returns every message-bearing channel and thread (containers), plus a
+// name lookup covering all channels including ones that cannot hold messages
+// directly (categories, forums) so those can still be used as group headers
+// and to resolve <#id> mentions. Missing metadata files are treated as empty
+// rather than an error, since a partial archive may not have committed them
+// yet.
+func loadContainers(root string) (containers []container, names map[string]string, err error) {
+	names = make(map[string]string)
+
+	channels := make(map[string]*discordgo.Channel)
+	if err := decodeJSONLines(filepath.Join(root, "metadata", "channels.jsonl"), func(line channelMetaLine) {
+		if line.Channel != nil {
+			channels[line.Channel.ID] = line.Channel
+		}
+	}); err != nil {
+		return nil, nil, err
+	}
+	for _, channel := range channels {
+		names[channel.ID] = channel.Name
+		if !archive.CanContainMessages(channel.Type) {
+			continue
+		}
+		containers = append(containers, container{
+			ID:       channel.ID,
+			Name:     channel.Name,
+			Type:     channel.Type,
+			ParentID: channel.ParentID,
+		})
+	}
+
+	threads := make(map[string]threadMetaLine)
+	if err := decodeJSONLines(filepath.Join(root, "metadata", "threads.jsonl"), func(line threadMetaLine) {
+		if line.Thread != nil {
+			threads[line.Thread.ID] = line
+		}
+	}); err != nil {
+		return nil, nil, err
+	}
+	for _, line := range threads {
+		names[line.Thread.ID] = line.Thread.Name
+		containers = append(containers, container{
+			ID:       line.Thread.ID,
+			Name:     line.Thread.Name,
+			Type:     line.Thread.Type,
+			ParentID: line.Thread.ParentID,
+			IsThread: true,
+			Source:   line.Source,
+		})
+	}
+
+	sort.Slice(containers, func(i, j int) bool {
+		if containers[i].ParentID != containers[j].ParentID {
+			return containers[i].ParentID < containers[j].ParentID
+		}
+		if containers[i].IsThread != containers[j].IsThread {
+			return !containers[i].IsThread
+		}
+		return containers[i].Name < containers[j].Name
+	})
+	return containers, names, nil
+}
+
+func findContainer(containers []container, id string) (container, bool) {
+	for _, c := range containers {
+		if c.ID == id {
+			return c, true
+		}
+	}
+	return container{}, false
+}
+
+var dateDirPattern = regexp.MustCompile(`^date=(\d{4}-\d{2}-\d{2})$`)
+
+// listDates returns, in ascending order, every date for which channelID has
+// an archived messages.jsonl file.
+func listDates(root, channelID string) ([]string, error) {
+	messagesRoot := filepath.Join(root, "messages")
+	entries, err := os.ReadDir(messagesRoot)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("read messages directory: %w", err)
+	}
+
+	var dates []string
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		match := dateDirPattern.FindStringSubmatch(entry.Name())
+		if match == nil {
+			continue
+		}
+		path := filepath.Join(messagesRoot, entry.Name(), "channel_id="+channelID, "messages.jsonl")
+		if _, err := os.Stat(path); err == nil {
+			dates = append(dates, match[1])
+		}
+	}
+	sort.Strings(dates)
+	return dates, nil
+}
+
+// loadMessages reads and sorts (ascending by timestamp) every message
+// archived for channelID on date.
+func loadMessages(root, date, channelID string) ([]*discordgo.Message, error) {
+	path := filepath.Join(root, "messages", "date="+date, "channel_id="+channelID, "messages.jsonl")
+
+	var messages []*discordgo.Message
+	err := decodeJSONLines(path, func(line messageLine) {
+		if line.Message != nil {
+			messages = append(messages, line.Message)
+		}
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	sort.Slice(messages, func(i, j int) bool {
+		return messages[i].Timestamp.Before(messages[j].Timestamp)
+	})
+	return messages, nil
+}
+
+// attachmentURL builds the path (under the /files/ route) an attachment is
+// served at.
+func attachmentURL(guildID, date, channelID, messageID string, attachment *discordgo.MessageAttachment) string {
+	relPath := archive.AttachmentRelPath(date, channelID, messageID, attachment)
+	parts := strings.Split(filepath.ToSlash(relPath), "/")
+	for i, p := range parts {
+		parts[i] = url.PathEscape(p)
+	}
+	return "/files/" + url.PathEscape(guildID) + "/" + strings.Join(parts, "/")
+}
+
+// hasLocalAttachment reports whether an attachment for (date, channelID,
+// messageID) was actually downloaded into the archive. Attachments archived
+// before the archiver started downloading files (or that failed to download)
+// have metadata only, with no file on disk.
+func hasLocalAttachment(root, date, channelID, messageID string, attachment *discordgo.MessageAttachment) bool {
+	relPath := archive.AttachmentRelPath(date, channelID, messageID, attachment)
+	_, err := os.Stat(filepath.Join(root, relPath))
+	return err == nil
+}
+
+func decodeJSONLines[T any](path string, fn func(T)) error {
+	file, err := os.Open(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("open %s: %w", path, err)
+	}
+	defer file.Close()
+
+	scanner := bufio.NewScanner(file)
+	scanner.Buffer(make([]byte, 0, 64*1024), 8*1024*1024)
+	for scanner.Scan() {
+		line := scanner.Bytes()
+		if len(strings.TrimSpace(string(line))) == 0 {
+			continue
+		}
+		var value T
+		if err := json.Unmarshal(line, &value); err != nil {
+			return fmt.Errorf("decode %s: %w", path, err)
+		}
+		fn(value)
+	}
+	if err := scanner.Err(); err != nil {
+		return fmt.Errorf("read %s: %w", path, err)
+	}
+	return nil
+}
