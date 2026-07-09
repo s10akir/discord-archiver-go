@@ -7,12 +7,17 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net/url"
 	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/bwmarrin/discordgo"
 )
+
+const jstLocation = "Asia/Tokyo"
 
 type archiveRecord struct {
 	GuildID     string                `json:"guild_id"`
@@ -23,13 +28,49 @@ type archiveRecord struct {
 	Message     *discordgo.Message    `json:"message"`
 }
 
+type channelRecord struct {
+	GuildID string             `json:"guild_id"`
+	Channel *discordgo.Channel `json:"channel"`
+}
+
+type threadRecord struct {
+	GuildID string             `json:"guild_id"`
+	Source  string             `json:"source"`
+	Thread  *discordgo.Channel `json:"thread"`
+}
+
+type dateFilter struct {
+	Date  string
+	Start time.Time
+	End   time.Time
+}
+
 type archiver struct {
-	session        *discordgo.Session
-	guildID        string
-	includeThreads bool
-	includePrivate bool
-	encoder        *json.Encoder
-	seenChannels   map[string]struct{}
+	session            *discordgo.Session
+	guildID            string
+	includeThreads     bool
+	includePrivate     bool
+	partitionLocation  *time.Location
+	dateFilter         *dateFilter
+	output             *archiveOutput
+	seenChannels       map[string]struct{}
+	seenThreadMetadata map[string]struct{}
+}
+
+type archiveOutput struct {
+	guildRoot     string
+	messagesRoot  string
+	dateFilter    *dateFilter
+	dateTempDir   string
+	dateTargetDir string
+	dateBackupDir string
+	messageFiles  map[string]*jsonFile
+	metadataFiles map[string]*jsonFile
+}
+
+type jsonFile struct {
+	file    *os.File
+	encoder *json.Encoder
 }
 
 func main() {
@@ -40,13 +81,14 @@ func main() {
 	var (
 		token          = flag.String("token", os.Getenv("DISCORD_BOT_TOKEN"), "Discord bot token. Defaults to DISCORD_BOT_TOKEN.")
 		guildID        = flag.String("guild", os.Getenv("DISCORD_GUILD_ID"), "Discord guild/server ID. Defaults to DISCORD_GUILD_ID.")
-		outputPath     = flag.String("out", "discord-archive.jsonl", "Output JSONL file path.")
+		outputDir      = flag.String("out-dir", "archive", "Output archive directory path.")
+		date           = flag.String("date", "", "JST date to refresh in YYYY-MM-DD format. When omitted, archives all visible history.")
 		includeThreads = flag.Bool("threads", true, "Include active and archived threads.")
 		excludePrivate = flag.Bool("no-private-threads", false, "Exclude private archived threads visible to the bot.")
 	)
 	flag.Parse()
 
-	if err := run(*token, *guildID, *outputPath, *includeThreads, !*excludePrivate); err != nil {
+	if err := run(*token, *guildID, *outputDir, *date, *includeThreads, !*excludePrivate); err != nil {
 		log.Fatal(err)
 	}
 }
@@ -95,7 +137,7 @@ func loadDotEnv(path string) error {
 	return nil
 }
 
-func run(token, guildID, outputPath string, includeThreads, includePrivate bool) error {
+func run(token, guildID, outputDir, date string, includeThreads, includePrivate bool) error {
 	if token == "" {
 		return errors.New("missing Discord bot token: set DISCORD_BOT_TOKEN or pass -token")
 	}
@@ -103,29 +145,47 @@ func run(token, guildID, outputPath string, includeThreads, includePrivate bool)
 		return errors.New("missing Discord guild ID: set DISCORD_GUILD_ID or pass -guild")
 	}
 
+	partitionLocation, err := time.LoadLocation(jstLocation)
+	if err != nil {
+		return fmt.Errorf("load %s location: %w", jstLocation, err)
+	}
+
+	filter, err := parseDateFilter(date, partitionLocation)
+	if err != nil {
+		return err
+	}
+
 	session, err := discordgo.New("Bot " + token)
 	if err != nil {
 		return fmt.Errorf("create discord session: %w", err)
 	}
 
-	out, err := os.Create(outputPath)
+	output, err := newArchiveOutput(outputDir, guildID, filter)
 	if err != nil {
-		return fmt.Errorf("create output file: %w", err)
+		return err
 	}
-	defer out.Close()
+	defer output.Cleanup()
 
 	a := &archiver{
-		session:        session,
-		guildID:        guildID,
-		includeThreads: includeThreads,
-		includePrivate: includePrivate,
-		encoder:        json.NewEncoder(out),
-		seenChannels:   make(map[string]struct{}),
+		session:            session,
+		guildID:            guildID,
+		includeThreads:     includeThreads,
+		includePrivate:     includePrivate,
+		partitionLocation:  partitionLocation,
+		dateFilter:         filter,
+		output:             output,
+		seenChannels:       make(map[string]struct{}),
+		seenThreadMetadata: make(map[string]struct{}),
 	}
 
 	channels, err := session.GuildChannels(guildID)
 	if err != nil {
 		return fmt.Errorf("list guild channels: %w", err)
+	}
+	for _, channel := range channels {
+		if err := output.WriteChannelMetadata(channelRecord{GuildID: guildID, Channel: channel}); err != nil {
+			return err
+		}
 	}
 
 	for _, channel := range channels {
@@ -143,7 +203,31 @@ func run(token, guildID, outputPath string, includeThreads, includePrivate bool)
 		}
 	}
 
+	if err := output.Close(); err != nil {
+		return err
+	}
+	if err := output.Commit(); err != nil {
+		return err
+	}
+
 	return nil
+}
+
+func parseDateFilter(date string, loc *time.Location) (*dateFilter, error) {
+	date = strings.TrimSpace(date)
+	if date == "" {
+		return nil, nil
+	}
+
+	start, err := time.ParseInLocation("2006-01-02", date, loc)
+	if err != nil {
+		return nil, fmt.Errorf("parse -date %q: expected YYYY-MM-DD: %w", date, err)
+	}
+	return &dateFilter{
+		Date:  date,
+		Start: start,
+		End:   start.AddDate(0, 0, 1),
+	}, nil
 }
 
 func canContainMessages(channelType discordgo.ChannelType) bool {
@@ -172,6 +256,66 @@ func canContainThreads(channelType discordgo.ChannelType) bool {
 	}
 }
 
+// channelMessagesCompat mirrors discordgo.Session.ChannelMessages while working around
+// discordgo v0.29.0 failing on newly introduced Discord component types.
+//
+// Remove this wrapper and call session.ChannelMessages directly once discordgo can
+// unmarshal unknown/future message component types without failing the whole page.
+func channelMessagesCompat(session *discordgo.Session, channelID string, limit int, beforeID, afterID, aroundID string) ([]*discordgo.Message, error) {
+	uri := discordgo.EndpointChannelMessages(channelID)
+
+	values := url.Values{}
+	if limit > 0 {
+		values.Set("limit", strconv.Itoa(limit))
+	}
+	if afterID != "" {
+		values.Set("after", afterID)
+	}
+	if beforeID != "" {
+		values.Set("before", beforeID)
+	}
+	if aroundID != "" {
+		values.Set("around", aroundID)
+	}
+	if len(values) > 0 {
+		uri += "?" + values.Encode()
+	}
+
+	body, err := session.RequestWithBucketID("GET", uri, nil, discordgo.EndpointChannelMessages(channelID))
+	if err != nil {
+		return nil, err
+	}
+
+	return unmarshalMessagesWithoutComponents(body)
+}
+
+// unmarshalMessagesWithoutComponents drops components before decoding because
+// discordgo.Message does not marshal Components back to JSON anyway.
+func unmarshalMessagesWithoutComponents(body []byte) ([]*discordgo.Message, error) {
+	var rawMessages []map[string]json.RawMessage
+	if err := json.Unmarshal(body, &rawMessages); err != nil {
+		return nil, err
+	}
+
+	messages := make([]*discordgo.Message, 0, len(rawMessages))
+	for _, rawMessage := range rawMessages {
+		delete(rawMessage, "components")
+
+		messageBody, err := json.Marshal(rawMessage)
+		if err != nil {
+			return nil, err
+		}
+
+		var message discordgo.Message
+		if err := json.Unmarshal(messageBody, &message); err != nil {
+			return nil, err
+		}
+		messages = append(messages, &message)
+	}
+
+	return messages, nil
+}
+
 func (a *archiver) archiveChannel(channel *discordgo.Channel) error {
 	if channel == nil {
 		return nil
@@ -185,7 +329,7 @@ func (a *archiver) archiveChannel(channel *discordgo.Channel) error {
 
 	var beforeID string
 	for {
-		messages, err := a.session.ChannelMessages(channel.ID, 100, beforeID, "", "")
+		messages, err := channelMessagesCompat(a.session, channel.ID, 100, beforeID, "", "")
 		if err != nil {
 			return err
 		}
@@ -193,7 +337,22 @@ func (a *archiver) archiveChannel(channel *discordgo.Channel) error {
 			return nil
 		}
 
+		stopChannel := false
 		for _, message := range messages {
+			messageTime, err := messageTimestamp(message)
+			if err != nil {
+				return err
+			}
+
+			include, olderThanFilter := a.shouldArchiveMessage(messageTime)
+			if olderThanFilter {
+				stopChannel = true
+				break
+			}
+			if !include {
+				continue
+			}
+
 			record := archiveRecord{
 				GuildID:     a.guildID,
 				ChannelID:   channel.ID,
@@ -202,13 +361,49 @@ func (a *archiver) archiveChannel(channel *discordgo.Channel) error {
 				ParentID:    channel.ParentID,
 				Message:     message,
 			}
-			if err := a.encoder.Encode(record); err != nil {
+			date := partitionDate(messageTime, a.partitionLocation)
+			if err := a.output.WriteMessage(date, channel.ID, record); err != nil {
 				return err
 			}
 		}
 
+		if stopChannel {
+			return nil
+		}
 		beforeID = messages[len(messages)-1].ID
 	}
+}
+
+func (a *archiver) shouldArchiveMessage(messageTime time.Time) (include bool, olderThanFilter bool) {
+	if a.dateFilter == nil {
+		return true, false
+	}
+	if messageTime.Before(a.dateFilter.Start) {
+		return false, true
+	}
+	if !messageTime.Before(a.dateFilter.End) {
+		return false, false
+	}
+	return true, false
+}
+
+func messageTimestamp(message *discordgo.Message) (time.Time, error) {
+	if message == nil {
+		return time.Time{}, errors.New("nil message")
+	}
+	if !message.Timestamp.IsZero() {
+		return message.Timestamp, nil
+	}
+
+	timestamp, err := discordgo.SnowflakeTimestamp(message.ID)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("derive message timestamp from snowflake %q: %w", message.ID, err)
+	}
+	return timestamp, nil
+}
+
+func partitionDate(messageTime time.Time, loc *time.Location) string {
+	return messageTime.In(loc).Format("2006-01-02")
 }
 
 func (a *archiver) archiveThreads(parentChannels []*discordgo.Channel) error {
@@ -217,6 +412,9 @@ func (a *archiver) archiveThreads(parentChannels []*discordgo.Channel) error {
 		return fmt.Errorf("list active threads: %w", err)
 	}
 	for _, thread := range activeThreads.Threads {
+		if err := a.writeThreadMetadata("active", thread); err != nil {
+			return err
+		}
 		if err := a.archiveChannel(thread); err != nil {
 			log.Printf("archive active thread %s (%s): %v", thread.Name, thread.ID, err)
 		}
@@ -239,6 +437,17 @@ func (a *archiver) archiveThreads(parentChannels []*discordgo.Channel) error {
 	return nil
 }
 
+func (a *archiver) writeThreadMetadata(source string, thread *discordgo.Channel) error {
+	if thread == nil {
+		return nil
+	}
+	if _, ok := a.seenThreadMetadata[thread.ID]; ok {
+		return nil
+	}
+	a.seenThreadMetadata[thread.ID] = struct{}{}
+	return a.output.WriteThreadMetadata(threadRecord{GuildID: a.guildID, Source: source, Thread: thread})
+}
+
 func (a *archiver) archivePublicArchivedThreads(parentChannelID string) error {
 	var before *time.Time
 	for {
@@ -251,6 +460,9 @@ func (a *archiver) archivePublicArchivedThreads(parentChannelID string) error {
 		}
 
 		for _, thread := range threads.Threads {
+			if err := a.writeThreadMetadata("public_archived", thread); err != nil {
+				return err
+			}
 			if err := a.archiveChannel(thread); err != nil {
 				log.Printf("archive public archived thread %s (%s): %v", thread.Name, thread.ID, err)
 			}
@@ -278,6 +490,9 @@ func (a *archiver) archivePrivateArchivedThreads(parentChannelID string) error {
 		}
 
 		for _, thread := range threads.Threads {
+			if err := a.writeThreadMetadata("private_archived", thread); err != nil {
+				return err
+			}
 			if err := a.archiveChannel(thread); err != nil {
 				log.Printf("archive private archived thread %s (%s): %v", thread.Name, thread.ID, err)
 			}
@@ -306,4 +521,160 @@ func oldestArchiveTimestamp(threads []*discordgo.Channel) *time.Time {
 		}
 	}
 	return oldest
+}
+
+func newArchiveOutput(outputDir, guildID string, filter *dateFilter) (*archiveOutput, error) {
+	guildRoot := filepath.Join(outputDir, "guild_id="+guildID)
+	messagesRoot := filepath.Join(guildRoot, "messages")
+
+	output := &archiveOutput{
+		guildRoot:     guildRoot,
+		messagesRoot:  messagesRoot,
+		dateFilter:    filter,
+		messageFiles:  make(map[string]*jsonFile),
+		metadataFiles: make(map[string]*jsonFile),
+	}
+
+	if err := os.MkdirAll(filepath.Join(guildRoot, "metadata"), 0o755); err != nil {
+		return nil, fmt.Errorf("create metadata directory: %w", err)
+	}
+	if err := os.MkdirAll(messagesRoot, 0o755); err != nil {
+		return nil, fmt.Errorf("create messages directory: %w", err)
+	}
+
+	if filter != nil {
+		output.dateTargetDir = filepath.Join(messagesRoot, "date="+filter.Date)
+		output.dateTempDir = filepath.Join(messagesRoot, fmt.Sprintf(".date=%s.tmp-%d-%d", filter.Date, os.Getpid(), time.Now().UnixNano()))
+		output.dateBackupDir = filepath.Join(messagesRoot, fmt.Sprintf(".date=%s.backup-%d-%d", filter.Date, os.Getpid(), time.Now().UnixNano()))
+		if err := os.MkdirAll(output.dateTempDir, 0o755); err != nil {
+			return nil, fmt.Errorf("create temporary date directory: %w", err)
+		}
+	}
+
+	return output, nil
+}
+
+func (o *archiveOutput) WriteChannelMetadata(record channelRecord) error {
+	file, err := o.metadataFile("channels.jsonl")
+	if err != nil {
+		return err
+	}
+	return file.encoder.Encode(record)
+}
+
+func (o *archiveOutput) WriteThreadMetadata(record threadRecord) error {
+	file, err := o.metadataFile("threads.jsonl")
+	if err != nil {
+		return err
+	}
+	return file.encoder.Encode(record)
+}
+
+func (o *archiveOutput) WriteMessage(date, channelID string, record archiveRecord) error {
+	file, err := o.messageFile(date, channelID)
+	if err != nil {
+		return err
+	}
+	return file.encoder.Encode(record)
+}
+
+func (o *archiveOutput) metadataFile(name string) (*jsonFile, error) {
+	path := filepath.Join(o.guildRoot, "metadata", name)
+	if file, ok := o.metadataFiles[path]; ok {
+		return file, nil
+	}
+
+	file, err := newJSONFile(path)
+	if err != nil {
+		return nil, err
+	}
+	o.metadataFiles[path] = file
+	return file, nil
+}
+
+func (o *archiveOutput) messageFile(date, channelID string) (*jsonFile, error) {
+	var dateDir string
+	if o.dateFilter != nil && date == o.dateFilter.Date {
+		dateDir = o.dateTempDir
+	} else {
+		dateDir = filepath.Join(o.messagesRoot, "date="+date)
+	}
+
+	path := filepath.Join(dateDir, "channel_id="+channelID, "messages.jsonl")
+	if file, ok := o.messageFiles[path]; ok {
+		return file, nil
+	}
+
+	file, err := newJSONFile(path)
+	if err != nil {
+		return nil, err
+	}
+	o.messageFiles[path] = file
+	return file, nil
+}
+
+func newJSONFile(path string) (*jsonFile, error) {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return nil, fmt.Errorf("create directory for %s: %w", path, err)
+	}
+
+	file, err := os.Create(path)
+	if err != nil {
+		return nil, fmt.Errorf("create %s: %w", path, err)
+	}
+	return &jsonFile{file: file, encoder: json.NewEncoder(file)}, nil
+}
+
+func (o *archiveOutput) Close() error {
+	var errs []error
+	for _, file := range o.messageFiles {
+		if err := file.file.Close(); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	for _, file := range o.metadataFiles {
+		if err := file.file.Close(); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	o.messageFiles = nil
+	o.metadataFiles = nil
+	return errors.Join(errs...)
+}
+
+func (o *archiveOutput) Commit() error {
+	if o.dateFilter == nil {
+		return nil
+	}
+
+	if _, err := os.Stat(o.dateTargetDir); err == nil {
+		if err := os.Rename(o.dateTargetDir, o.dateBackupDir); err != nil {
+			return fmt.Errorf("move existing date directory aside: %w", err)
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("stat existing date directory: %w", err)
+	}
+
+	if err := os.Rename(o.dateTempDir, o.dateTargetDir); err != nil {
+		if o.dateBackupDir != "" {
+			_ = os.Rename(o.dateBackupDir, o.dateTargetDir)
+		}
+		return fmt.Errorf("replace date directory: %w", err)
+	}
+	o.dateTempDir = ""
+
+	if o.dateBackupDir != "" {
+		if err := os.RemoveAll(o.dateBackupDir); err != nil {
+			return fmt.Errorf("remove date directory backup: %w", err)
+		}
+	}
+
+	return nil
+}
+
+func (o *archiveOutput) Cleanup() {
+	_ = o.Close()
+	if o.dateTempDir != "" {
+		_ = os.RemoveAll(o.dateTempDir)
+	}
 }

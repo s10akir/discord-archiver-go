@@ -13,25 +13,49 @@ DISCORD_BOT_TOKEN=your-bot-token
 DISCORD_GUILD_ID=your-guild-id
 ```
 
+全期間を取得する場合:
+
 ```bash
-go run ./cmd/discord-archiver -out discord-archive.jsonl
+go run ./cmd/discord-archiver -out-dir archive
 ```
 
-フラグでも指定できます。
+指定したJST日付だけを洗い替える場合:
+
+```bash
+go run ./cmd/discord-archiver -out-dir archive -date 2026-07-09
+```
+
+フラグでもBot tokenとguild IDを指定できます。
 
 ```bash
 go run ./cmd/discord-archiver \
   -token 'your-bot-token' \
   -guild 'your-guild-id' \
-  -out discord-archive.jsonl
+  -out-dir archive
 ```
 
 デフォルトでは通常チャンネルに加えて、アクティブスレッド、公開アーカイブ済みスレッド、Botから見える非公開アーカイブ済みスレッドも取得します。非公開アーカイブ済みスレッドを除外する場合は `-no-private-threads` を付けます。
 
 ```bash
-go run ./cmd/discord-archiver -no-private-threads -out discord-archive.jsonl
+go run ./cmd/discord-archiver -out-dir archive -no-private-threads
 ```
 
 ## Output
 
-出力は1メッセージ1行のJSONLです。各行には `guild_id`、`channel_id`、`channel_name`、`channel_type`、`parent_id`、discordgoの `message` オブジェクトが入ります。
+出力先のデフォルトは `archive` です。
+
+```text
+archive/
+  guild_id=817806841718243360/
+    metadata/
+      channels.jsonl
+      threads.jsonl
+    messages/
+      date=2026-07-09/
+        channel_id=817806841718243361/
+          messages.jsonl
+```
+
+`date=YYYY-MM-DD` はJST基準のメッセージ作成日です。JSONL内の `message.timestamp` はdiscordgoが受け取ったDiscord APIの値をそのまま保存します。
+
+`messages.jsonl` は1メッセージ1行です。各行には `guild_id`、`channel_id`、`channel_name`、`channel_type`、`parent_id`、discordgoの `message` オブジェクトが入ります。
