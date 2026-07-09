@@ -11,8 +11,10 @@ import (
 
 type archiveOutput struct {
 	guildRoot     string
+	metadataRoot  string
 	messagesRoot  string
 	dateFilter    *dateFilter
+	tempSuffix    string
 	dateTempDir   string
 	dateTargetDir string
 	dateBackupDir string
@@ -21,33 +23,44 @@ type archiveOutput struct {
 }
 
 type jsonFile struct {
-	file    *os.File
-	encoder *json.Encoder
+	file      *os.File
+	encoder   *json.Encoder
+	closed    bool
+	committed bool // temp file has been renamed to its final path
+}
+
+func (f *jsonFile) Close() error {
+	if f.closed {
+		return nil
+	}
+	f.closed = true
+	return f.file.Close()
 }
 
 func newArchiveOutput(outputDir, guildID string, filter *dateFilter) (*archiveOutput, error) {
 	guildRoot := filepath.Join(outputDir, "guild_id="+guildID)
-	messagesRoot := filepath.Join(guildRoot, "messages")
 
 	output := &archiveOutput{
 		guildRoot:     guildRoot,
-		messagesRoot:  messagesRoot,
+		metadataRoot:  filepath.Join(guildRoot, "metadata"),
+		messagesRoot:  filepath.Join(guildRoot, "messages"),
 		dateFilter:    filter,
+		tempSuffix:    fmt.Sprintf("tmp-%d-%d", os.Getpid(), time.Now().UnixNano()),
 		messageFiles:  make(map[string]*jsonFile),
 		metadataFiles: make(map[string]*jsonFile),
 	}
 
-	if err := os.MkdirAll(filepath.Join(guildRoot, "metadata"), 0o755); err != nil {
+	if err := os.MkdirAll(output.metadataRoot, 0o755); err != nil {
 		return nil, fmt.Errorf("create metadata directory: %w", err)
 	}
-	if err := os.MkdirAll(messagesRoot, 0o755); err != nil {
+	if err := os.MkdirAll(output.messagesRoot, 0o755); err != nil {
 		return nil, fmt.Errorf("create messages directory: %w", err)
 	}
 
 	if filter != nil {
-		output.dateTargetDir = filepath.Join(messagesRoot, "date="+filter.Date)
-		output.dateTempDir = filepath.Join(messagesRoot, fmt.Sprintf(".date=%s.tmp-%d-%d", filter.Date, os.Getpid(), time.Now().UnixNano()))
-		output.dateBackupDir = filepath.Join(messagesRoot, fmt.Sprintf(".date=%s.backup-%d-%d", filter.Date, os.Getpid(), time.Now().UnixNano()))
+		output.dateTargetDir = filepath.Join(output.messagesRoot, "date="+filter.Date)
+		output.dateTempDir = filepath.Join(output.messagesRoot, fmt.Sprintf(".date=%s.%s", filter.Date, output.tempSuffix))
+		output.dateBackupDir = filepath.Join(output.messagesRoot, fmt.Sprintf(".date=%s.backup-%d-%d", filter.Date, os.Getpid(), time.Now().UnixNano()))
 		if err := os.MkdirAll(output.dateTempDir, 0o755); err != nil {
 			return nil, fmt.Errorf("create temporary date directory: %w", err)
 		}
@@ -80,13 +93,16 @@ func (o *archiveOutput) WriteMessage(date, channelID string, record archiveRecor
 	return file.encoder.Encode(record)
 }
 
+// metadataFile stages writes in a hidden temp file next to the final path;
+// Commit renames it over the previous version so a failed run never leaves a
+// half-written channels.jsonl/threads.jsonl behind.
 func (o *archiveOutput) metadataFile(name string) (*jsonFile, error) {
-	path := filepath.Join(o.guildRoot, "metadata", name)
+	path := filepath.Join(o.metadataRoot, name)
 	if file, ok := o.metadataFiles[path]; ok {
 		return file, nil
 	}
 
-	file, err := newJSONFile(path)
+	file, err := newJSONFile(filepath.Join(o.metadataRoot, fmt.Sprintf(".%s.%s", name, o.tempSuffix)))
 	if err != nil {
 		return nil, err
 	}
@@ -130,21 +146,26 @@ func newJSONFile(path string) (*jsonFile, error) {
 func (o *archiveOutput) Close() error {
 	var errs []error
 	for _, file := range o.messageFiles {
-		if err := file.file.Close(); err != nil {
+		if err := file.Close(); err != nil {
 			errs = append(errs, err)
 		}
 	}
 	for _, file := range o.metadataFiles {
-		if err := file.file.Close(); err != nil {
+		if err := file.Close(); err != nil {
 			errs = append(errs, err)
 		}
 	}
-	o.messageFiles = nil
-	o.metadataFiles = nil
 	return errors.Join(errs...)
 }
 
 func (o *archiveOutput) Commit() error {
+	if err := o.commitDatePartition(); err != nil {
+		return err
+	}
+	return o.commitMetadata()
+}
+
+func (o *archiveOutput) commitDatePartition() error {
 	if o.dateFilter == nil {
 		return nil
 	}
@@ -174,9 +195,27 @@ func (o *archiveOutput) Commit() error {
 	return nil
 }
 
+func (o *archiveOutput) commitMetadata() error {
+	for path, file := range o.metadataFiles {
+		if file.committed {
+			continue
+		}
+		if err := os.Rename(file.file.Name(), path); err != nil {
+			return fmt.Errorf("replace %s: %w", path, err)
+		}
+		file.committed = true
+	}
+	return nil
+}
+
 func (o *archiveOutput) Cleanup() {
 	_ = o.Close()
 	if o.dateTempDir != "" {
 		_ = os.RemoveAll(o.dateTempDir)
+	}
+	for _, file := range o.metadataFiles {
+		if !file.committed {
+			_ = os.Remove(file.file.Name())
+		}
 	}
 }

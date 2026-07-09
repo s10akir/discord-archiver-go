@@ -166,3 +166,95 @@ func TestArchiveOutputDateCommitReplacesTarget(t *testing.T) {
 		t.Fatalf("new date file missing: %v", err)
 	}
 }
+
+func TestArchiveOutputMetadataReplacedOnCommit(t *testing.T) {
+	root := t.TempDir()
+	metadataPath := filepath.Join(root, "guild_id=guild1", "metadata", "channels.jsonl")
+	if err := os.MkdirAll(filepath.Dir(metadataPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(metadataPath, []byte("old\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	output, err := newArchiveOutput(root, "guild1", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := output.WriteChannelMetadata(channelRecord{
+		GuildID: "guild1",
+		Channel: &discordgo.Channel{ID: "channel1", Name: "general"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := output.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Before Commit the previous metadata must be untouched.
+	data, err := os.ReadFile(metadataPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "old\n" {
+		t.Fatalf("metadata overwritten before Commit: %q", data)
+	}
+
+	if err := output.Commit(); err != nil {
+		t.Fatal(err)
+	}
+
+	file, err := os.Open(metadataPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	var got channelRecord
+	if err := json.NewDecoder(file).Decode(&got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Channel.ID != "channel1" {
+		t.Fatalf("channel id = %q", got.Channel.ID)
+	}
+}
+
+func TestArchiveOutputCleanupWithoutCommitKeepsOldMetadata(t *testing.T) {
+	root := t.TempDir()
+	metadataPath := filepath.Join(root, "guild_id=guild1", "metadata", "channels.jsonl")
+	if err := os.MkdirAll(filepath.Dir(metadataPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(metadataPath, []byte("old\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	output, err := newArchiveOutput(root, "guild1", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := output.WriteChannelMetadata(channelRecord{
+		GuildID: "guild1",
+		Channel: &discordgo.Channel{ID: "channel1"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	output.Cleanup()
+
+	data, err := os.ReadFile(metadataPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "old\n" {
+		t.Fatalf("metadata overwritten without Commit: %q", data)
+	}
+
+	entries, err := os.ReadDir(filepath.Dir(metadataPath))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if entry.Name() != "channels.jsonl" {
+			t.Fatalf("leftover metadata temp file: %s", entry.Name())
+		}
+	}
+}
