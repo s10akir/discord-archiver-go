@@ -26,6 +26,20 @@ type server struct {
 	newMessageStore func(root string) messageStore
 }
 
+func (s *server) guilds(ctx context.Context) ([]string, error) {
+	if s.db != nil {
+		return dbGuilds(ctx, s.db)
+	}
+	return listGuilds(s.archiveDir)
+}
+
+func (s *server) containers(ctx context.Context, guildID string) ([]container, map[string]string, error) {
+	if s.db != nil {
+		return dbContainers(ctx, s.db, guildID)
+	}
+	return loadContainers(guildRoot(s.archiveDir, guildID))
+}
+
 const messagePageSize = 100
 
 // NewHandler builds the web application's HTTP handler rooted at archiveDir, the same
@@ -46,9 +60,14 @@ func newHandler(archiveDir string, db *sql.DB) (http.Handler, error) {
 	s := &server{
 		archiveDir: archiveDir,
 		db:         db,
-		newMessageStore: func(root string) messageStore {
-			return jsonlMessageStore{root: root}
+		newMessageStore: func(guildID string) messageStore {
+			return jsonlMessageStore{root: guildRoot(archiveDir, guildID)}
 		},
+	}
+	if db != nil {
+		s.newMessageStore = func(guildID string) messageStore {
+			return postgresMessageStore{db: db, ctx: context.Background(), guildID: guildID}
+		}
 	}
 
 	mux := http.NewServeMux()
@@ -132,7 +151,7 @@ func (s *server) handleImportDate(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) handleGuilds(w http.ResponseWriter, r *http.Request) {
-	guilds, err := listGuilds(s.archiveDir)
+	guilds, err := s.guilds(r.Context())
 	if err != nil {
 		httpError(w, err)
 		return
@@ -160,9 +179,7 @@ type channelItem struct {
 
 func (s *server) handleChannels(w http.ResponseWriter, r *http.Request) {
 	guildID := r.PathValue("guild")
-	root := guildRoot(s.archiveDir, guildID)
-
-	containers, names, err := loadContainers(root)
+	containers, names, err := s.containers(r.Context(), guildID)
 	if err != nil {
 		httpError(w, err)
 		return
@@ -293,7 +310,7 @@ func (s *server) handleMessages(w http.ResponseWriter, r *http.Request) {
 	channelID := r.PathValue("channel")
 	root := guildRoot(s.archiveDir, guildID)
 
-	containers, names, err := loadContainers(root)
+	containers, names, err := s.containers(r.Context(), guildID)
 	if err != nil {
 		httpError(w, err)
 		return
@@ -303,7 +320,7 @@ func (s *server) handleMessages(w http.ResponseWriter, r *http.Request) {
 		channel = container{ID: channelID, Name: channelID}
 	}
 
-	page, err := s.newMessageStore(root).Page(channelID, nil, messagePageSize)
+	page, err := s.newMessageStore(guildID).Page(channelID, nil, messagePageSize)
 	if err != nil {
 		httpError(w, err)
 		return
@@ -320,12 +337,12 @@ func (s *server) handleMessages(w http.ResponseWriter, r *http.Request) {
 func (s *server) handleAllMessages(w http.ResponseWriter, r *http.Request) {
 	guildID := r.PathValue("guild")
 	root := guildRoot(s.archiveDir, guildID)
-	_, names, err := loadContainers(root)
+	_, names, err := s.containers(r.Context(), guildID)
 	if err != nil {
 		httpError(w, err)
 		return
 	}
-	page, err := s.newMessageStore(root).AllPage(nil, messagePageSize)
+	page, err := s.newMessageStore(guildID).AllPage(nil, messagePageSize)
 	if err != nil {
 		httpError(w, err)
 		return
@@ -347,13 +364,13 @@ func (s *server) handleMessagePage(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, "invalid cursor", http.StatusBadRequest)
 		return
 	}
-	_, names, err := loadContainers(root)
+	_, names, err := s.containers(r.Context(), guildID)
 	if err != nil {
 		log.Printf("viewer error: %v", err)
 		writeJSONError(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	page, err := s.newMessageStore(root).Page(channelID, cursor, messagePageSize)
+	page, err := s.newMessageStore(guildID).Page(channelID, cursor, messagePageSize)
 	if err != nil {
 		log.Printf("viewer error: %v", err)
 		writeJSONError(w, "internal error", http.StatusInternalServerError)
@@ -385,13 +402,13 @@ func (s *server) handleAllMessagePage(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, "invalid cursor", http.StatusBadRequest)
 		return
 	}
-	_, names, err := loadContainers(root)
+	_, names, err := s.containers(r.Context(), guildID)
 	if err != nil {
 		log.Printf("viewer error: %v", err)
 		writeJSONError(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	page, err := s.newMessageStore(root).AllPage(cursor, messagePageSize)
+	page, err := s.newMessageStore(guildID).AllPage(cursor, messagePageSize)
 	if err != nil {
 		log.Printf("viewer error: %v", err)
 		writeJSONError(w, "internal error", http.StatusInternalServerError)
@@ -459,7 +476,7 @@ func (s *server) handleMedia(kind mediaKindView) http.HandlerFunc {
 		channelID := r.PathValue("channel")
 		root := guildRoot(s.archiveDir, guildID)
 
-		containers, names, err := loadContainers(root)
+		containers, names, err := s.containers(r.Context(), guildID)
 		if err != nil {
 			httpError(w, err)
 			return
@@ -468,7 +485,7 @@ func (s *server) handleMedia(kind mediaKindView) http.HandlerFunc {
 		if !ok {
 			channel = container{ID: channelID, Name: channelID}
 		}
-		page, err := s.newMessageStore(root).MediaPage(channelID, kind.Kind, nil, messagePageSize)
+		page, err := s.newMessageStore(guildID).MediaPage(channelID, kind.Kind, nil, messagePageSize)
 		if err != nil {
 			httpError(w, err)
 			return
@@ -487,12 +504,12 @@ func (s *server) handleAllMedia(kind mediaKindView) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		guildID := r.PathValue("guild")
 		root := guildRoot(s.archiveDir, guildID)
-		_, names, err := loadContainers(root)
+		_, names, err := s.containers(r.Context(), guildID)
 		if err != nil {
 			httpError(w, err)
 			return
 		}
-		page, err := s.newMessageStore(root).AllMediaPage(kind.Kind, nil, messagePageSize)
+		page, err := s.newMessageStore(guildID).AllMediaPage(kind.Kind, nil, messagePageSize)
 		if err != nil {
 			httpError(w, err)
 			return
@@ -516,13 +533,13 @@ func (s *server) handleMediaPage(kind mediaKindView) http.HandlerFunc {
 			writeJSONError(w, "invalid cursor", http.StatusBadRequest)
 			return
 		}
-		_, names, err := loadContainers(root)
+		_, names, err := s.containers(r.Context(), guildID)
 		if err != nil {
 			log.Printf("viewer error: %v", err)
 			writeJSONError(w, "internal error", http.StatusInternalServerError)
 			return
 		}
-		page, err := s.newMessageStore(root).MediaPage(channelID, kind.Kind, cursor, messagePageSize)
+		page, err := s.newMessageStore(guildID).MediaPage(channelID, kind.Kind, cursor, messagePageSize)
 		if err != nil {
 			log.Printf("viewer error: %v", err)
 			writeJSONError(w, "internal error", http.StatusInternalServerError)
@@ -555,13 +572,13 @@ func (s *server) handleAllMediaPage(kind mediaKindView) http.HandlerFunc {
 			writeJSONError(w, "invalid cursor", http.StatusBadRequest)
 			return
 		}
-		_, names, err := loadContainers(root)
+		_, names, err := s.containers(r.Context(), guildID)
 		if err != nil {
 			log.Printf("viewer error: %v", err)
 			writeJSONError(w, "internal error", http.StatusInternalServerError)
 			return
 		}
-		page, err := s.newMessageStore(root).AllMediaPage(kind.Kind, cursor, messagePageSize)
+		page, err := s.newMessageStore(guildID).AllMediaPage(kind.Kind, cursor, messagePageSize)
 		if err != nil {
 			log.Printf("viewer error: %v", err)
 			writeJSONError(w, "internal error", http.StatusInternalServerError)
