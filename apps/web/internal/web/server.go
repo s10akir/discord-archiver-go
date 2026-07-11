@@ -71,6 +71,14 @@ func newHandler(archiveDir string, db *sql.DB) (http.Handler, error) {
 	}
 
 	mux := http.NewServeMux()
+	mux.HandleFunc("GET /api/v1/guilds", s.handleAPIGuilds)
+	mux.HandleFunc("GET /api/v1/guilds/{guild}/navigation", s.handleAPINavigation)
+	mux.HandleFunc("GET /api/v1/guilds/{guild}/messages", s.handleAPIMessages)
+	mux.HandleFunc("GET /api/v1/guilds/{guild}/media/{kind}", s.handleAPIMedia)
+	if db != nil {
+		mux.HandleFunc("GET /api/v1/search/options", s.handleAPISearchOptions)
+		mux.HandleFunc("GET /api/v1/search/messages", s.handleAPISearch)
+	}
 	mux.HandleFunc("GET /{$}", s.handleGuilds)
 	mux.HandleFunc("GET /g/{guild}", s.handleChannels)
 	mux.HandleFunc("GET /g/{guild}/all", s.handleAllMessages)
@@ -814,30 +822,30 @@ type messageView struct {
 }
 
 type attachmentView struct {
-	URL       string
-	Filename  string
-	Size      int
-	Width     int
-	Height    int
-	IsImage   bool
-	IsVideo   bool
-	IsAudio   bool
-	Available bool
+	URL       string `json:"url,omitempty"`
+	Filename  string `json:"filename"`
+	Size      int    `json:"size"`
+	Width     int    `json:"width,omitempty"`
+	Height    int    `json:"height,omitempty"`
+	IsImage   bool   `json:"is_image"`
+	IsVideo   bool   `json:"is_video"`
+	IsAudio   bool   `json:"is_audio"`
+	Available bool   `json:"available"`
 }
 
 type embedView struct {
-	Title       string
-	URL         string
-	Description string
-	ImageURL    string
-	ImageWidth  int
-	ImageHeight int
-	Color       string
+	Title       string `json:"title,omitempty"`
+	URL         string `json:"url,omitempty"`
+	Description string `json:"description,omitempty"`
+	ImageURL    string `json:"image_url,omitempty"`
+	ImageWidth  int    `json:"image_width,omitempty"`
+	ImageHeight int    `json:"image_height,omitempty"`
+	Color       string `json:"color"`
 }
 
 type reactionView struct {
-	Emoji string
-	Count int
+	Emoji string `json:"emoji"`
+	Count int    `json:"count"`
 }
 
 func buildMessageView(root, guildID string, archived archivedMessage, names map[string]string) messageView {

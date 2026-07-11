@@ -63,9 +63,9 @@ type searchFilter struct {
 }
 
 type searchOption struct {
-	Value    string
-	Label    string
-	Selected bool
+	Value    string `json:"value"`
+	Label    string `json:"label"`
+	Selected bool   `json:"-"`
 }
 
 func searchOptions(ctx context.Context, db *sql.DB, selectedChannel, selectedAuthor string) ([]searchOption, []searchOption, bool, bool, error) {
