@@ -58,6 +58,7 @@ type messagePage struct {
 
 type messageStore interface {
 	Page(channelID string, before *messageCursor, limit int) (messagePage, error)
+	MediaPage(channelID string, before *messageCursor, limit int) (messagePage, error)
 }
 
 type jsonlMessageStore struct {
@@ -65,6 +66,24 @@ type jsonlMessageStore struct {
 }
 
 func (s jsonlMessageStore) Page(channelID string, before *messageCursor, limit int) (messagePage, error) {
+	page, err := s.page(channelID, before, limit, nil)
+	if err != nil {
+		return messagePage{}, err
+	}
+	// The message view reads chronologically from top to bottom.
+	for i, j := 0, len(page.Messages)-1; i < j; i, j = i+1, j-1 {
+		page.Messages[i], page.Messages[j] = page.Messages[j], page.Messages[i]
+	}
+	return page, nil
+}
+
+func (s jsonlMessageStore) MediaPage(channelID string, before *messageCursor, limit int) (messagePage, error) {
+	return s.page(channelID, before, limit, func(message *discordgo.Message) bool {
+		return len(message.Attachments) > 0 || len(message.Embeds) > 0
+	})
+}
+
+func (s jsonlMessageStore) page(channelID string, before *messageCursor, limit int, include func(*discordgo.Message) bool) (messagePage, error) {
 	if limit <= 0 {
 		return messagePage{}, nil
 	}
@@ -98,6 +117,9 @@ func (s jsonlMessageStore) Page(channelID string, before *messageCursor, limit i
 			if before != nil && date == before.Date && !messageBefore(message, cursorTime, before.ID) {
 				continue
 			}
+			if include != nil && !include(message) {
+				continue
+			}
 			collected = append(collected, archivedMessage{Date: date, Message: message})
 		}
 	}
@@ -106,13 +128,9 @@ func (s jsonlMessageStore) Page(channelID string, before *messageCursor, limit i
 	if hasMore {
 		collected = collected[:limit]
 	}
-	for i, j := 0, len(collected)-1; i < j; i, j = i+1, j-1 {
-		collected[i], collected[j] = collected[j], collected[i]
-	}
-
 	page := messagePage{Messages: collected, HasMore: hasMore}
 	if hasMore && len(collected) > 0 {
-		oldest := collected[0]
+		oldest := collected[len(collected)-1]
 		page.NextCursor = &messageCursor{
 			Date:      oldest.Date,
 			Timestamp: oldest.Message.Timestamp.Format(time.RFC3339Nano),

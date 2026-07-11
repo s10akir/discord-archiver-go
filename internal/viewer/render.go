@@ -146,6 +146,10 @@ header {
 }
 header h1 { font-size: 16px; margin: 0; color: #f2f3f5; }
 header .crumbs { font-size: 12px; color: #949ba4; margin-top: 4px; }
+.view-tabs { display: flex; gap: 6px; margin-top: 10px; }
+.view-tabs a { color: #b5bac1; padding: 5px 9px; border-radius: 4px; font-size: 13px; }
+.view-tabs a:hover { background: #3a3c41; text-decoration: none; }
+.view-tabs a.active { color: #fff; background: #404249; }
 main { max-width: 900px; margin: 0 auto; padding: 16px 20px 60px; }
 .group { margin-bottom: 22px; }
 .group h2 { font-size: 12px; text-transform: uppercase; color: #949ba4; letter-spacing: .03em; margin: 0 0 6px; }
@@ -195,6 +199,20 @@ main { max-width: 900px; margin: 0 auto; padding: 16px 20px 60px; }
 .reaction { background: #2b2d31; border-radius: 8px; padding: 2px 7px; font-size: 12px; }
 .reply { font-size: 12px; color: #949ba4; margin-bottom: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 480px; }
 .empty { color: #949ba4; padding: 30px 0; text-align: center; }
+.media-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 14px; }
+.media-card { min-width: 0; overflow: hidden; border-radius: 8px; background: #2b2d31; border: 1px solid #3f4147; }
+.media-preview { min-height: 150px; display: flex; align-items: center; justify-content: center; background: #1e1f22; }
+.media-preview img, .media-preview video { width: 100%; height: 220px; object-fit: contain; display: block; }
+.media-preview audio { width: calc(100% - 20px); }
+.media-file { padding: 20px; overflow-wrap: anywhere; text-align: center; }
+.media-file .file-size { display: block; color: #949ba4; font-size: 12px; margin-top: 5px; }
+.media-embed { align-items: stretch; justify-content: flex-start; flex-direction: column; }
+.media-embed-body { padding: 12px; overflow-wrap: anywhere; }
+.media-embed-title { font-weight: 600; margin-bottom: 5px; }
+.media-embed-desc { color: #c7c9cd; font-size: 13px; white-space: pre-wrap; }
+.media-placeholder { color: #949ba4; padding: 32px 12px; text-align: center; }
+.media-meta { padding: 9px 11px; font-size: 12px; color: #949ba4; border-top: 1px solid #3f4147; }
+.media-meta .media-author { color: #dbdee1; font-weight: 600; margin-right: 6px; }
 `
 
 var funcMap = template.FuncMap{
@@ -246,6 +264,7 @@ var messagesTemplate = template.Must(template.New("messages").Funcs(funcMap).Par
 <header>
 <h1>{{.Channel.Name}}</h1>
 <div class="crumbs"><a href="/g/{{.GuildID}}">&laquo; channels</a></div>
+<nav class="view-tabs" aria-label="表示切替"><a class="active" href="/g/{{.GuildID}}/c/{{.Channel.ID}}">メッセージ</a><a href="/g/{{.GuildID}}/c/{{.Channel.ID}}/media">メディア</a></nav>
 </header>
 <main>
 {{if not .Sections}}<p class="empty">アーカイブされたメッセージがありません。</p>{{end}}
@@ -404,5 +423,81 @@ finishInitialLoading();
 {{end}}
 </div>
  </section>
+{{end}}{{end}}
+`))
+
+var mediaTemplate = template.Must(template.New("media").Funcs(funcMap).Parse(`<!doctype html>
+<html><head><meta charset="utf-8"><title>{{.Channel.Name}} media - Discord Archive</title><style>` + baseCSS + `</style></head>
+<body>
+<header>
+<h1>{{.Channel.Name}}</h1>
+<div class="crumbs"><a href="/g/{{.GuildID}}">&laquo; channels</a></div>
+<nav class="view-tabs" aria-label="表示切替"><a href="/g/{{.GuildID}}/c/{{.Channel.ID}}">メッセージ</a><a class="active" href="/g/{{.GuildID}}/c/{{.Channel.ID}}/media">メディア</a></nav>
+</header>
+<main>
+{{if not .Items}}<p id="media-empty" class="empty">アーカイブされたメディアがありません。</p>{{end}}
+<div id="media-grid" class="media-grid">{{template "media-items" .Items}}</div>
+<div id="media-sentinel" data-cursor="{{.Cursor}}" data-has-more="{{.HasMore}}"></div>
+<div id="media-status" class="load-status"></div>
+</main>
+<script>
+const sentinel = document.getElementById("media-sentinel");
+const grid = document.getElementById("media-grid");
+const status = document.getElementById("media-status");
+let loading = false;
+
+async function loadOlderMedia() {
+  if (loading || sentinel.dataset.hasMore !== "true") return;
+  loading = true;
+  status.textContent = "過去のメディアを読み込み中…";
+  try {
+    const response = await fetch(window.location.pathname + "/items?before=" + encodeURIComponent(sentinel.dataset.cursor));
+    if (!response.ok) throw new Error("request failed: " + response.status);
+    const page = await response.json();
+    grid.insertAdjacentHTML("beforeend", page.html);
+    sentinel.dataset.cursor = page.next_cursor;
+    sentinel.dataset.hasMore = String(page.has_more);
+    status.textContent = page.has_more ? "" : "これより古いメディアはありません。";
+    if (!page.has_more) observer.disconnect();
+  } catch (error) {
+    status.replaceChildren();
+    const retry = document.createElement("button");
+    retry.type = "button";
+    retry.textContent = "読み込みに失敗しました。再試行";
+    retry.addEventListener("click", loadOlderMedia);
+    status.appendChild(retry);
+  } finally {
+    loading = false;
+  }
+}
+
+const observer = new IntersectionObserver(entries => {
+  if (entries.some(entry => entry.isIntersecting)) loadOlderMedia();
+}, { rootMargin: "0px 0px 300px" });
+if (sentinel.dataset.hasMore === "true") observer.observe(sentinel);
+</script>
+</body></html>
+{{define "media-items"}}{{range .}}
+<article class="media-card">
+  {{with .Attachment}}
+    <div class="media-preview">
+    {{if not .Available}}<div class="media-placeholder">&#9888; asset archive not found:<br>{{.Filename}}</div>
+    {{else if .IsImage}}<a href="{{.URL}}" target="_blank" rel="noopener noreferrer"><img src="{{.URL}}" alt="{{.Filename}}" loading="lazy"{{if and .Width .Height}} width="{{.Width}}" height="{{.Height}}"{{end}}></a>
+    {{else if .IsVideo}}<video src="{{.URL}}" controls preload="metadata"{{if and .Width .Height}} width="{{.Width}}" height="{{.Height}}"{{end}}></video>
+    {{else if .IsAudio}}<audio src="{{.URL}}" controls preload="metadata"></audio>
+    {{else}}<div class="media-file"><a href="{{.URL}}" target="_blank" rel="noopener noreferrer">&#128206; {{.Filename}}</a><span class="file-size">{{formatBytes .Size}}</span></div>{{end}}
+    </div>
+  {{end}}
+  {{with .Embed}}
+    <div class="media-preview media-embed" style="border-top:4px solid {{.Color}}">
+      {{if .ImageURL}}<img src="{{.ImageURL}}" alt="" loading="lazy"{{if and .ImageWidth .ImageHeight}} width="{{.ImageWidth}}" height="{{.ImageHeight}}"{{end}}>{{end}}
+      {{if or .Title .Description}}<div class="media-embed-body">
+        {{if .Title}}<div class="media-embed-title">{{if .URL}}<a href="{{.URL}}" target="_blank" rel="noopener noreferrer">{{.Title}}</a>{{else}}{{.Title}}{{end}}</div>{{end}}
+        {{if .Description}}<div class="media-embed-desc">{{.Description}}</div>{{end}}
+      </div>{{else if not .ImageURL}}<div class="media-placeholder">埋め込み</div>{{end}}
+    </div>
+  {{end}}
+  <div class="media-meta"><span class="media-author">{{.AuthorName}}</span><time>{{.Timestamp}}</time></div>
+</article>
 {{end}}{{end}}
 `))
