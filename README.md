@@ -136,6 +136,15 @@ docker build -f apps/archiver/Dockerfile -t discord-archiver .
 docker build -f apps/viewer/Dockerfile -t discord-archive-viewer .
 ```
 
+`main` ブランチが更新されると、GitHub Actionsがamd64/arm64向けのイメージをGHCRへ公開します。
+
+```bash
+docker pull ghcr.io/s10akir/discord-archiver:latest
+docker pull ghcr.io/s10akir/discord-archive-viewer:latest
+```
+
+各イメージには `latest` に加えて、公開元のコミットを特定できる `sha-<短縮コミットSHA>` タグが付きます。Pull Requestではイメージを公開せず、両プラットフォーム向けのビルドだけを検証します。
+
 Archiverだけを直接起動する場合:
 
 ```bash
