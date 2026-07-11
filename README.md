@@ -2,12 +2,13 @@
 
 Discord bot tokenを使って、指定したDiscordサーバーの見えるチャンネルとメッセージをJSONLに書き出します。
 
-Archiverと閲覧用Webアプリを独立したGoアプリとして管理するmonorepoです。
+Archiver、PostgreSQLを正本とするWebアプリ、JSONLをHTTP同期するImporterを独立したGoアプリとして管理するmonorepoです。
 
 ```text
 apps/
   archiver/       Discordからアーカイブを作成するアプリ
-  web/            保存済みアーカイブを閲覧するWebアプリ
+  web/            PostgreSQL上のアーカイブを閲覧・検索するWebアプリ
+  importer/       JSONLを検出してWebへ同期する外部アプリ
 pkg/
   archiveformat/  両アプリが共有する保存形式の契約
 ```
@@ -85,31 +86,45 @@ go run ./apps/archiver/cmd/discord-archiver -out-dir archive -attachments=false
 
 ## Web
 
-アーカイブ済みのデータをブラウザで閲覧する簡易ビューワです。Discord bot tokenは不要で、`-out-dir` のアーカイブディレクトリだけで動作します。
+アーカイブ済みデータをPostgreSQLから閲覧・検索するWebアプリです。添付ファイルの実体だけをarchiveディレクトリからread-onlyで配信します。
 
 ```bash
-go run ./apps/web/cmd/discord-archive-web -out-dir archive -addr :8080
+DATABASE_URL='postgres://discord_archive:discord_archive@localhost:5432/discord_archive?sslmode=disable' \
+  go run ./apps/web/cmd/discord-archive-web -out-dir archive -addr :8080
 ```
 
-`http://localhost:8080/` にアクセスすると、ギルド → チャンネル/スレッド → 日付 → メッセージの順にたどれます。チャンネル一覧の「全チャンネル」から、通常チャンネルとスレッドの投稿を横断した時系列表示も利用できます。メンション・埋め込み・添付ファイル（画像/動画/音声のインライン表示を含む）を簡易的にレンダリングします。チャンネル別画面と全チャンネル画面では「画像」「動画」「音声」「ファイル」「埋め込み」のタブから、各種メディアを新しい順のグリッドで一覧表示できます。添付ファイルの実体はアーカイブディレクトリから直接配信されます。
+`http://localhost:8080/` ではギルド、チャンネル/スレッド、メッセージ、メディアを閲覧できます。`/search` では本文・投稿者・添付名・embedの部分一致と、guild、channel、期間、添付、メディア種別による絞り込みを利用できます。
 
 ```dotenv
 DISCORD_ARCHIVE_WEB_ADDR=:8080
+DATABASE_URL=postgres://discord_archive:discord_archive@localhost:5432/discord_archive?sslmode=disable
+```
+
+## Importer
+
+Importerは起動時に既存archiveを全件同期し、その後は内容ハッシュが変わったmetadataと日付パーティションを定期的にWebの更新APIへ送ります。PostgreSQLへは接続しません。
+
+```bash
+DISCORD_ARCHIVE_WEB_URL=http://localhost:8080 \
+  go run ./apps/importer/cmd/discord-archive-importer -archive-dir archive -interval 30s
 ```
 
 ## Development
 
-ルートの `go.work` に3つのmoduleを登録しています。全moduleのテストと各アプリのビルドは次のように実行します。
+ルートの `go.work` に4つのmoduleを登録しています。全moduleのテストと各アプリのビルドは次のように実行します。
 
 ```bash
 GOCACHE=/tmp/go-build-cache GOMODCACHE=/tmp/go-mod-cache \
-  go test ./apps/archiver/... ./apps/web/... ./pkg/archiveformat/...
+  go test ./apps/archiver/... ./apps/web/... ./apps/importer/... ./pkg/archiveformat/...
 
 GOCACHE=/tmp/go-build-cache GOMODCACHE=/tmp/go-mod-cache \
   go build -o /tmp/discord-archiver ./apps/archiver/cmd/discord-archiver
 
 GOCACHE=/tmp/go-build-cache GOMODCACHE=/tmp/go-mod-cache \
   go build -o /tmp/discord-archive-web ./apps/web/cmd/discord-archive-web
+
+GOCACHE=/tmp/go-build-cache GOMODCACHE=/tmp/go-mod-cache \
+  go build -o /tmp/discord-archive-importer ./apps/importer/cmd/discord-archive-importer
 ```
 
 ## Docker
@@ -121,7 +136,7 @@ DISCORD_BOT_TOKEN=your-bot-token
 DISCORD_GUILD_ID=your-guild-id
 ```
 
-ComposeでArchiverとWebを起動します。両サービスはホストの `./archive` を共有し、Webからはread-onlyでマウントされます。
+ComposeでArchiver、PostgreSQL、Web、Importerを起動します。Archiverはarchiveへ書き込み、WebとImporterはread-onlyで共有します。ImporterからWebへの更新APIはCompose内部ネットワークだけで利用します。
 
 ```bash
 docker compose up -d --build
@@ -134,6 +149,7 @@ Webはホストの8080番ポートで公開されます。
 ```bash
 docker build -f apps/archiver/Dockerfile -t discord-archiver .
 docker build -f apps/web/Dockerfile -t discord-archive-web .
+docker build -f apps/importer/Dockerfile -t discord-archive-importer .
 ```
 
 `main` ブランチが更新されると、GitHub Actionsがamd64/arm64向けのイメージをGHCRへ公開します。
@@ -141,6 +157,7 @@ docker build -f apps/web/Dockerfile -t discord-archive-web .
 ```bash
 docker pull ghcr.io/s10akir/discord-archiver:latest
 docker pull ghcr.io/s10akir/discord-archive-web:latest
+docker pull ghcr.io/s10akir/discord-archive-importer:latest
 ```
 
 各イメージには `latest` に加えて、公開元のコミットを特定できる `sha-<短縮コミットSHA>` タグが付きます。Pull Requestではイメージを公開せず、両プラットフォーム向けのビルドだけを検証します。
