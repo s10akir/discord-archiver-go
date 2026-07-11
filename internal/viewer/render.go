@@ -1,6 +1,7 @@
 package viewer
 
 import (
+	"bytes"
 	"fmt"
 	"hash/fnv"
 	"html"
@@ -9,22 +10,33 @@ import (
 	"strings"
 
 	"github.com/bwmarrin/discordgo"
+	"github.com/yuin/goldmark"
+	"github.com/yuin/goldmark/extension"
+	goldmarkhtml "github.com/yuin/goldmark/renderer/html"
 )
 
-// contentTokenPattern matches the Discord message-content tokens the viewer
-// understands: custom emoji, user/role/channel mentions, and bare URLs.
-// Everything outside a match is escaped as plain text.
-var contentTokenPattern = regexp.MustCompile(
+// discordTokenPattern matches the Discord-specific tokens that need display
+// names. URLs are handled by goldmark's linkify extension.
+var discordTokenPattern = regexp.MustCompile(
 	`<a?:(\w+):\d+>` + // 1: emoji name
 		`|<@!?(\d+)>` + // 2: user id
 		`|<@&(\d+)>` + // 3: role id
-		`|<#(\d+)>` + // 4: channel id
-		`|(https?://[^\s<>]+)`, // 5: URL
+		`|<#(\d+)>`, // 4: channel id
 )
 
-// formatContent renders Discord message content as safe HTML: plain text is
-// escaped, mentions are resolved to display names, and URLs are linkified.
-// This is intentionally not a full markdown renderer.
+var messageMarkdown = goldmark.New(
+	goldmark.WithExtensions(extension.GFM),
+	goldmark.WithRendererOptions(goldmarkhtml.WithHardWraps()),
+)
+
+type discordReplacement struct {
+	placeholder string
+	html        string
+}
+
+// formatContent renders Discord message Markdown as safe HTML, then restores
+// resolved Discord mentions and custom emoji. Raw HTML remains disabled in the
+// Markdown renderer, so archived message content cannot inject markup.
 func formatContent(content string, mentions []*discordgo.User, channelNames map[string]string) template.HTML {
 	if content == "" {
 		return ""
@@ -37,48 +49,48 @@ func formatContent(content string, mentions []*discordgo.User, channelNames map[
 		}
 	}
 
-	var out strings.Builder
-	last := 0
-	matches := contentTokenPattern.FindAllStringSubmatchIndex(content, -1)
-	for _, m := range matches {
-		writeEscapedText(&out, content[last:m[0]])
-		last = m[1]
-
+	replacements := make([]discordReplacement, 0)
+	placeholderPrefix := "DISCORDARCHIVERTOKEN"
+	for strings.Contains(content, placeholderPrefix) {
+		placeholderPrefix += "X"
+	}
+	protected := discordTokenPattern.ReplaceAllStringFunc(content, func(token string) string {
+		m := discordTokenPattern.FindStringSubmatch(token)
+		var rendered string
 		switch {
-		case m[2] >= 0: // emoji
-			out.WriteString(`<span class="mention emoji">:` + html.EscapeString(content[m[2]:m[3]]) + `:</span>`)
-		case m[4] >= 0: // user
-			id := content[m[4]:m[5]]
+		case m[1] != "": // emoji
+			rendered = `<span class="mention emoji">:` + html.EscapeString(m[1]) + `:</span>`
+		case m[2] != "": // user
+			id := m[2]
 			name, ok := userNames[id]
 			if !ok {
 				name = "user"
 			}
-			out.WriteString(`<span class="mention">@` + html.EscapeString(name) + `</span>`)
-		case m[6] >= 0: // role
-			out.WriteString(`<span class="mention">@role</span>`)
-		case m[8] >= 0: // channel
-			id := content[m[8]:m[9]]
+			rendered = `<span class="mention">@` + html.EscapeString(name) + `</span>`
+		case m[3] != "": // role
+			rendered = `<span class="mention">@role</span>`
+		case m[4] != "": // channel
+			id := m[4]
 			name, ok := channelNames[id]
 			if !ok {
 				name = "deleted-channel"
 			}
-			out.WriteString(`<span class="mention">#` + html.EscapeString(name) + `</span>`)
-		case m[10] >= 0: // URL
-			url := content[m[10]:m[11]]
-			escaped := html.EscapeString(url)
-			out.WriteString(`<a href="` + escaped + `" target="_blank" rel="noopener noreferrer">` + escaped + `</a>`)
+			rendered = `<span class="mention">#` + html.EscapeString(name) + `</span>`
 		}
-	}
-	writeEscapedText(&out, content[last:])
+		placeholder := fmt.Sprintf("%s%dX", placeholderPrefix, len(replacements))
+		replacements = append(replacements, discordReplacement{placeholder, rendered})
+		return placeholder
+	})
 
-	return template.HTML(out.String())
-}
-
-func writeEscapedText(out *strings.Builder, text string) {
-	if text == "" {
-		return
+	var out bytes.Buffer
+	if err := messageMarkdown.Convert([]byte(protected), &out); err != nil {
+		return template.HTML(html.EscapeString(content))
 	}
-	out.WriteString(strings.ReplaceAll(html.EscapeString(text), "\n", "<br>"))
+	rendered := out.String()
+	for _, replacement := range replacements {
+		rendered = strings.ReplaceAll(rendered, replacement.placeholder, replacement.html)
+	}
+	return template.HTML(rendered)
 }
 
 // avatarColor derives a stable CSS color from an ID so the same author always
@@ -180,7 +192,20 @@ main { max-width: 900px; margin: 0 auto; padding: 16px 20px 60px; }
 .author { font-weight: 600; color: #f2f3f5; }
 .timestamp { font-size: 12px; color: #949ba4; }
 .edited { font-size: 11px; color: #949ba4; }
-.content { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.4; }
+.content { overflow-wrap: anywhere; line-height: 1.4; }
+.content > :first-child { margin-top: 0; }
+.content > :last-child { margin-bottom: 0; }
+.content p { margin: 0 0 4px; }
+.content h1, .content h2, .content h3, .content h4, .content h5, .content h6 { margin: 8px 0 4px; color: #f2f3f5; line-height: 1.2; }
+.content h1 { font-size: 1.5em; } .content h2 { font-size: 1.3em; } .content h3 { font-size: 1.15em; }
+.content blockquote { margin: 4px 0; padding-left: 10px; border-left: 4px solid #4e5058; color: #b5bac1; }
+.content ul, .content ol { margin: 4px 0; padding-left: 24px; }
+.content code { background: #2b2d31; border-radius: 3px; padding: 1px 3px; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: .875em; }
+.content pre { margin: 6px 0; padding: 8px; overflow-x: auto; background: #2b2d31; border: 1px solid #1e1f22; border-radius: 4px; }
+.content pre code { padding: 0; background: transparent; white-space: pre; }
+.content del { color: #949ba4; }
+.content table { border-collapse: collapse; margin: 6px 0; }
+.content th, .content td { border: 1px solid #4e5058; padding: 3px 7px; }
 .mention { background: rgba(88,101,242,.3); color: #c9cdfb; border-radius: 3px; padding: 0 2px; }
 .attachments { margin-top: 6px; display: flex; flex-direction: column; gap: 6px; }
 .attachments img, .attachments video { width: auto; height: auto; max-width: min(400px, 100%); max-height: 300px; border-radius: 6px; display: block; }

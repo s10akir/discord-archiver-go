@@ -2,7 +2,10 @@ module github.com/s10akir/discord-archiver-go
 
 go 1.26.4
 
-require github.com/bwmarrin/discordgo v0.29.0
+require (
+	github.com/bwmarrin/discordgo v0.29.0
+	github.com/yuin/goldmark v1.7.13
+)
 
 require (
 	github.com/gorilla/websocket v1.4.2 // indirect
