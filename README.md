@@ -114,10 +114,31 @@ GOCACHE=/tmp/go-build-cache GOMODCACHE=/tmp/go-mod-cache \
 
 ## Docker
 
-イメージをビルドして起動すると、コンテナ内でデーモンとして常駐します。
+`.env` にDiscordの接続情報を設定します。このファイルはGitの追跡対象外です。
+
+```dotenv
+DISCORD_BOT_TOKEN=your-bot-token
+DISCORD_GUILD_ID=your-guild-id
+```
+
+ComposeでArchiverとViewerを起動します。両サービスはホストの `./archive` を共有し、Viewerからはread-onlyでマウントされます。
 
 ```bash
-docker build -t discord-archiver .
+docker compose up -d --build
+```
+
+Viewerはホストの8080番ポートで公開されます。
+
+各アプリのイメージを個別にビルドする場合:
+
+```bash
+docker build -f apps/archiver/Dockerfile -t discord-archiver .
+docker build -f apps/viewer/Dockerfile -t discord-archive-viewer .
+```
+
+Archiverだけを直接起動する場合:
+
+```bash
 docker run --rm \
   -e DISCORD_BOT_TOKEN \
   -e DISCORD_GUILD_ID \
@@ -126,8 +147,6 @@ docker run --rm \
   -v "$PWD/archive:/data/archive" \
   discord-archiver -out-dir /data/archive
 ```
-
-`compose.yaml.example` も同じ設定例です。
 
 ## Output
 

@@ -1,6 +1,8 @@
 services:
   discord-archiver:
-    build: .
+    build:
+      context: .
+      dockerfile: apps/archiver/Dockerfile
     restart: unless-stopped
     environment:
       DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN}
@@ -11,3 +13,14 @@ services:
     volumes:
       - ./archive:/data/archive
     command: ["-out-dir", "/data/archive"]
+
+  discord-archive-viewer:
+    build:
+      context: .
+      dockerfile: apps/viewer/Dockerfile
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./archive:/data/archive:ro
+    command: ["-out-dir", "/data/archive", "-addr", ":8080"]
