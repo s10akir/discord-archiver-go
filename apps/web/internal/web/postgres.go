@@ -61,7 +61,7 @@ type searchFilter struct {
 	Attachment, Embed                        string
 }
 
-func searchMessages(ctx context.Context, db *sql.DB, filter searchFilter, limit int) ([]archivedMessage, error) {
+func searchMessages(ctx context.Context, db *sql.DB, filter searchFilter, before *messageCursor, limit int) (messagePage, error) {
 	args := []any{}
 	where := []string{"true"}
 	add := func(value any) string { args = append(args, value); return fmt.Sprintf("$%d", len(args)) }
@@ -105,11 +105,18 @@ func searchMessages(ctx context.Context, db *sql.DB, filter searchFilter, limit 
 			where = append(where, "EXISTS (SELECT 1 FROM attachments am WHERE am.guild_id=m.guild_id AND am.message_id=m.id AND lower(am.content_type) LIKE "+add(pattern)+")")
 		}
 	}
-	args = append(args, limit)
+	if before != nil {
+		cursorTime, err := time.Parse(time.RFC3339Nano, before.Timestamp)
+		if err != nil {
+			return messagePage{}, fmt.Errorf("parse search cursor: %w", err)
+		}
+		where = append(where, "(m.timestamp,m.id) < ("+add(cursorTime)+","+add(before.ID)+")")
+	}
+	args = append(args, limit+1)
 	query := `SELECT m.guild_id,m.archive_date::text,m.channel_id,COALESCE(c.name,''),m.payload FROM messages m LEFT JOIN channels c ON c.guild_id=m.guild_id AND c.id=m.channel_id WHERE ` + strings.Join(where, " AND ") + fmt.Sprintf(` ORDER BY m.timestamp DESC,m.id DESC LIMIT $%d`, len(args))
 	rows, err := db.QueryContext(ctx, query, args...)
 	if err != nil {
-		return nil, err
+		return messagePage{}, err
 	}
 	defer rows.Close()
 	var items []archivedMessage
@@ -117,16 +124,28 @@ func searchMessages(ctx context.Context, db *sql.DB, filter searchFilter, limit 
 		var item archivedMessage
 		var payload []byte
 		if err := rows.Scan(&item.GuildID, &item.Date, &item.ChannelID, &item.ChannelName, &payload); err != nil {
-			return nil, err
+			return messagePage{}, err
 		}
 		var message discordgo.Message
 		if err := json.Unmarshal(payload, &message); err != nil {
-			return nil, err
+			return messagePage{}, err
 		}
 		item.Message = &message
 		items = append(items, item)
 	}
-	return items, rows.Err()
+	if err := rows.Err(); err != nil {
+		return messagePage{}, err
+	}
+	hasMore := len(items) > limit
+	if hasMore {
+		items = items[:limit]
+	}
+	page := messagePage{Messages: items, HasMore: hasMore}
+	if hasMore && len(items) > 0 {
+		oldest := items[len(items)-1]
+		page.NextCursor = &messageCursor{Date: oldest.Date, Timestamp: oldest.Message.Timestamp.Format(time.RFC3339Nano), ID: oldest.Message.ID}
+	}
+	return page, nil
 }
 
 func (s postgresMessageStore) Page(channelID string, before *messageCursor, limit int) (messagePage, error) {
