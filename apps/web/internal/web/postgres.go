@@ -106,7 +106,7 @@ func searchMessages(ctx context.Context, db *sql.DB, filter searchFilter, limit 
 		}
 	}
 	args = append(args, limit)
-	query := `SELECT m.archive_date::text,m.channel_id,COALESCE(c.name,''),m.payload FROM messages m LEFT JOIN channels c ON c.guild_id=m.guild_id AND c.id=m.channel_id WHERE ` + strings.Join(where, " AND ") + fmt.Sprintf(` ORDER BY m.timestamp DESC,m.id DESC LIMIT $%d`, len(args))
+	query := `SELECT m.guild_id,m.archive_date::text,m.channel_id,COALESCE(c.name,''),m.payload FROM messages m LEFT JOIN channels c ON c.guild_id=m.guild_id AND c.id=m.channel_id WHERE ` + strings.Join(where, " AND ") + fmt.Sprintf(` ORDER BY m.timestamp DESC,m.id DESC LIMIT $%d`, len(args))
 	rows, err := db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
@@ -116,7 +116,7 @@ func searchMessages(ctx context.Context, db *sql.DB, filter searchFilter, limit 
 	for rows.Next() {
 		var item archivedMessage
 		var payload []byte
-		if err := rows.Scan(&item.Date, &item.ChannelID, &item.ChannelName, &payload); err != nil {
+		if err := rows.Scan(&item.GuildID, &item.Date, &item.ChannelID, &item.ChannelName, &payload); err != nil {
 			return nil, err
 		}
 		var message discordgo.Message
@@ -182,7 +182,7 @@ func (s postgresMessageStore) query(channelID, kind string, before *messageCurso
 		where = append(where, "m.has_attachments")
 	}
 	args = append(args, limit+1)
-	query := `SELECT m.archive_date::text,m.channel_id,COALESCE(c.name,''),m.payload FROM messages m LEFT JOIN channels c ON c.guild_id=m.guild_id AND c.id=m.channel_id WHERE ` + strings.Join(where, " AND ") + fmt.Sprintf(` ORDER BY m.timestamp DESC,m.id DESC LIMIT $%d`, len(args))
+	query := `SELECT m.guild_id,m.archive_date::text,m.channel_id,COALESCE(c.name,''),m.payload FROM messages m LEFT JOIN channels c ON c.guild_id=m.guild_id AND c.id=m.channel_id WHERE ` + strings.Join(where, " AND ") + fmt.Sprintf(` ORDER BY m.timestamp DESC,m.id DESC LIMIT $%d`, len(args))
 	rows, err := s.db.QueryContext(s.ctx, query, args...)
 	if err != nil {
 		return messagePage{}, err
@@ -192,7 +192,7 @@ func (s postgresMessageStore) query(channelID, kind string, before *messageCurso
 	for rows.Next() {
 		var item archivedMessage
 		var payload []byte
-		if err := rows.Scan(&item.Date, &item.ChannelID, &item.ChannelName, &payload); err != nil {
+		if err := rows.Scan(&item.GuildID, &item.Date, &item.ChannelID, &item.ChannelName, &payload); err != nil {
 			return messagePage{}, err
 		}
 		var message discordgo.Message

@@ -584,6 +584,31 @@ func TestMessagePageReturnsRenderedOlderMessages(t *testing.T) {
 	}
 }
 
+func TestSearchResultUsesMessageGuildForAttachmentPath(t *testing.T) {
+	archiveDir := t.TempDir()
+	attachment := &discordgo.MessageAttachment{ID: "attachment1", Filename: "image.png", ContentType: "image/png", Size: 5}
+	path := filepath.Join(archiveDir, "guild_id=guild1", "messages", "date=2026-07-11", "channel_id=channel1", "attachments", "message1", "attachment1-image.png")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("image"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	sections := buildMessageSections(
+		guildRoot(archiveDir, ""), "",
+		[]archivedMessage{{GuildID: "guild1", Date: "2026-07-11", ChannelID: "channel1", Message: testMessage("message1", "2026-07-11T00:00:00Z", "", attachment)}},
+		map[string]string{"channel1": "general"}, true,
+	)
+	got := sections[0].Messages[0]
+	if !got.Attachments[0].Available {
+		t.Fatal("attachment reported unavailable")
+	}
+	if got.Attachments[0].URL != "/files/guild1/messages/date=2026-07-11/channel_id=channel1/attachments/message1/attachment1-image.png" {
+		t.Fatalf("attachment URL = %q", got.Attachments[0].URL)
+	}
+}
+
 func writeViewerMetadata(t *testing.T, root string) {
 	t.Helper()
 	path := filepath.Join(root, "metadata", "channels.jsonl")

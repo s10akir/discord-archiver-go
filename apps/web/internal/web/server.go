@@ -642,7 +642,13 @@ func (s *server) handleAllMediaPage(kind mediaKindView) http.HandlerFunc {
 func buildMediaItems(root, guildID string, kind mediaKind, messages []archivedMessage, names map[string]string, showChannel bool) []mediaItem {
 	var items []mediaItem
 	for _, archived := range messages {
-		view := buildMessageView(root, guildID, archived, names)
+		messageGuildID := guildID
+		messageRoot := root
+		if archived.GuildID != "" {
+			messageGuildID = archived.GuildID
+			messageRoot = guildRoot(filepath.Dir(root), messageGuildID)
+		}
+		view := buildMessageView(messageRoot, messageGuildID, archived, names)
 		base := mediaItem{AuthorName: view.AuthorName, Timestamp: view.Timestamp}
 		if showChannel {
 			base.ChannelID, base.ChannelName = view.ChannelID, view.ChannelName
@@ -681,7 +687,13 @@ func buildMessageSections(root, guildID string, messages []archivedMessage, name
 			sections = append(sections, messageSection{Date: archived.Date})
 		}
 		section := &sections[len(sections)-1]
-		view := buildMessageView(root, guildID, archived, names)
+		messageGuildID := guildID
+		messageRoot := root
+		if archived.GuildID != "" {
+			messageGuildID = archived.GuildID
+			messageRoot = guildRoot(filepath.Dir(root), messageGuildID)
+		}
+		view := buildMessageView(messageRoot, messageGuildID, archived, names)
 		view.ShowChannel = showChannel
 		section.Messages = append(section.Messages, view)
 	}

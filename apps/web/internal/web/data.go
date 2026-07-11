@@ -25,6 +25,7 @@ type threadMetaLine = archiveformat.ThreadRecord
 type messageLine = archiveformat.MessageRecord
 
 type archivedMessage struct {
+	GuildID     string
 	Date        string
 	ChannelID   string
 	ChannelName string
@@ -465,7 +466,7 @@ func loadArchivedMessages(root, date, channelID string) ([]archivedMessage, erro
 			if id == "" {
 				id = channelID
 			}
-			messages = append(messages, archivedMessage{Date: date, ChannelID: id, ChannelName: line.ChannelName, Message: line.Message})
+			messages = append(messages, archivedMessage{GuildID: line.GuildID, Date: date, ChannelID: id, ChannelName: line.ChannelName, Message: line.Message})
 		}
 	})
 	if err != nil {
