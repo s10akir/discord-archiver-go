@@ -11,9 +11,9 @@ import (
 	"regexp"
 	"strconv"
 	"time"
-	"unicode/utf8"
 
 	"github.com/bwmarrin/discordgo"
+	"github.com/s10akir/discord-archiver-go/pkg/archiveformat"
 )
 
 // archiveWriter is the output-side boundary: where archived records go.
@@ -207,87 +207,13 @@ func (o *archiveOutput) messageFile(date, channelID string) (*jsonFile, error) {
 	return file, nil
 }
 
-// attachmentFilenamePattern matches characters not safe to embed verbatim in
-// a path component; anything else is replaced with "_".
-var attachmentFilenamePattern = regexp.MustCompile(`[/\\\x00]`)
-
-// maxAttachmentNameBytes keeps the "<id>-<filename>" path component within
-// the 255-byte NAME_MAX most filesystems enforce. Discord's CDN sometimes
-// hands back filenames well over 200 bytes on their own (e.g. signed/
-// tokenized names), which otherwise makes os.Create fail with "file name too
-// long".
-const maxAttachmentNameBytes = 255
-
-func sanitizeAttachmentFilename(filename string) string {
-	base := filepath.Base(filename)
-	if base == "" || base == "." || base == string(filepath.Separator) {
-		return "file"
-	}
-	return attachmentFilenamePattern.ReplaceAllString(base, "_")
-}
-
-// attachmentFileName builds the on-disk name for an attachment, truncating
-// the (sanitized) original filename as needed so "<id>-<name>" fits within
-// maxAttachmentNameBytes. The extension is preserved when possible so file
-// type detection by extension still works.
-func attachmentFileName(id, filename string) string {
-	prefix := id + "-"
-	name := sanitizeAttachmentFilename(filename)
-
-	budget := maxAttachmentNameBytes - len(prefix)
-	if budget <= 0 {
-		return truncateFilenameBytes(prefix, maxAttachmentNameBytes)
-	}
-	return prefix + truncateFilenameWithExt(name, budget)
-}
-
-// truncateFilenameWithExt truncates name to at most maxBytes bytes, keeping
-// its extension intact when the extension itself fits within the budget.
-func truncateFilenameWithExt(name string, maxBytes int) string {
-	if len(name) <= maxBytes {
-		return name
-	}
-
-	ext := filepath.Ext(name)
-	if len(ext) >= maxBytes {
-		return truncateFilenameBytes(name, maxBytes)
-	}
-
-	base := truncateFilenameBytes(name[:len(name)-len(ext)], maxBytes-len(ext))
-	return base + ext
-}
-
-// truncateFilenameBytes truncates s to at most maxBytes bytes without
-// splitting a multi-byte UTF-8 rune.
-func truncateFilenameBytes(s string, maxBytes int) string {
-	if len(s) <= maxBytes {
-		return s
-	}
-	for maxBytes > 0 {
-		r, size := utf8.DecodeLastRuneInString(s[:maxBytes])
-		if r != utf8.RuneError || size != 1 {
-			break
-		}
-		maxBytes--
-	}
-	return s[:maxBytes]
-}
-
-// AttachmentRelPath returns the path, relative to a guild's root directory,
-// at which an attachment for (date, channelID, messageID) is stored once
-// committed. Consumers that only read the archive (e.g. a viewer) can use it
-// to locate attachment files without duplicating the on-disk layout.
-func AttachmentRelPath(date, channelID, messageID string, attachment *discordgo.MessageAttachment) string {
-	name := attachmentFileName(attachment.ID, attachment.Filename)
-	return filepath.Join("messages", "date="+date, "channel_id="+channelID, "attachments", messageID, name)
-}
-
 // attachmentPaths returns the directory an attachment for (date, channelID,
 // messageID) lives in, both in the tree being written this run (dir) and in
 // the currently committed archive (committedDir). The two differ only while
 // date is being staged in a temp directory ahead of an atomic replace.
 func (o *archiveOutput) attachmentPaths(date, channelID, messageID string, attachment *discordgo.MessageAttachment) (writePath, committedPath string) {
-	name := attachmentFileName(attachment.ID, attachment.Filename)
+	relPath := archiveformat.AttachmentRelPath(date, channelID, messageID, attachment)
+	name := filepath.Base(relPath)
 
 	if o.dateFilter != nil && date == o.dateFilter.Date {
 		writePath = filepath.Join(o.dateTempDir, "channel_id="+channelID, "attachments", messageID, name)

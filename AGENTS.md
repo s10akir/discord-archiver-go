@@ -8,7 +8,7 @@ running Go commands in such environments, use cache directories under `/tmp`:
 ```bash
 GOCACHE=/tmp/go-build-cache \
 GOMODCACHE=/tmp/go-mod-cache \
-go test ./...
+go test ./apps/archiver/... ./apps/viewer/... ./pkg/archiveformat/...
 ```
 
 For building the CLI binary:
@@ -16,7 +16,15 @@ For building the CLI binary:
 ```bash
 GOCACHE=/tmp/go-build-cache \
 GOMODCACHE=/tmp/go-mod-cache \
-go build -o /tmp/discord-archiver ./cmd/discord-archiver
+go build -o /tmp/discord-archiver ./apps/archiver/cmd/discord-archiver
+```
+
+For building the viewer binary:
+
+```bash
+GOCACHE=/tmp/go-build-cache \
+GOMODCACHE=/tmp/go-mod-cache \
+go build -o /tmp/discord-archive-viewer ./apps/viewer/cmd/discord-archive-viewer
 ```
 
 ## Commit Messages

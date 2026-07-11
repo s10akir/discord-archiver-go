@@ -3,7 +3,7 @@ package cli
 import (
 	"testing"
 
-	"github.com/s10akir/discord-archiver-go/internal/archive"
+	"github.com/s10akir/discord-archiver-go/apps/archiver/internal/archive"
 )
 
 func TestParseDefaultsToDaemon(t *testing.T) {

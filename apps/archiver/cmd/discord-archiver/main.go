@@ -8,11 +8,10 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/s10akir/discord-archiver-go/internal/archive"
-	"github.com/s10akir/discord-archiver-go/internal/cli"
-	"github.com/s10akir/discord-archiver-go/internal/dotenv"
-	"github.com/s10akir/discord-archiver-go/internal/scheduler"
-	"github.com/s10akir/discord-archiver-go/internal/viewer"
+	"github.com/s10akir/discord-archiver-go/apps/archiver/internal/archive"
+	"github.com/s10akir/discord-archiver-go/apps/archiver/internal/cli"
+	"github.com/s10akir/discord-archiver-go/apps/archiver/internal/dotenv"
+	"github.com/s10akir/discord-archiver-go/apps/archiver/internal/scheduler"
 )
 
 func main() {
@@ -43,10 +42,6 @@ func run(config cli.Config) error {
 		})
 	case cli.ModeDump:
 		return archive.Run(config.Archive, config.Date)
-	case cli.ModeView:
-		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-		defer stop()
-		return viewer.Run(ctx, config.Archive.OutputDir, config.ViewAddr)
 	default:
 		return fmt.Errorf("unknown command mode %q", config.Mode)
 	}

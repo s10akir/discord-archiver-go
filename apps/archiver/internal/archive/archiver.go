@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/bwmarrin/discordgo"
+	"github.com/s10akir/discord-archiver-go/pkg/archiveformat"
 )
 
 type archiver struct {
@@ -30,25 +31,8 @@ func (a *archiver) fail(err error) {
 	a.failures = append(a.failures, err)
 }
 
-// CanContainMessages reports whether a channel of the given type has its own
-// message history (as opposed to only containing threads, e.g. a category or
-// forum channel).
-func CanContainMessages(channelType discordgo.ChannelType) bool {
-	return canContainMessages(channelType)
-}
-
 func canContainMessages(channelType discordgo.ChannelType) bool {
-	switch channelType {
-	case discordgo.ChannelTypeGuildText,
-		discordgo.ChannelTypeGuildNews,
-		discordgo.ChannelTypeGuildVoice,
-		discordgo.ChannelTypeGuildNewsThread,
-		discordgo.ChannelTypeGuildPublicThread,
-		discordgo.ChannelTypeGuildPrivateThread:
-		return true
-	default:
-		return false
-	}
+	return archiveformat.CanContainMessages(channelType)
 }
 
 func canContainThreads(channelType discordgo.ChannelType) bool {

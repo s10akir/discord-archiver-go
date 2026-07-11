@@ -1,5 +1,5 @@
 // Package viewer serves a read-only browser UI over an archive directory
-// produced by the archive package, without needing a Discord token.
+// without needing a Discord token.
 package viewer
 
 import (
@@ -17,28 +17,12 @@ import (
 	"time"
 
 	"github.com/bwmarrin/discordgo"
-	"github.com/s10akir/discord-archiver-go/internal/archive"
+	"github.com/s10akir/discord-archiver-go/pkg/archiveformat"
 )
 
-// channelMetaLine and threadMetaLine mirror the JSON shape written by
-// archive.archiveOutput (channelRecord/threadRecord); the viewer only reads
-// the archive, so it decodes the format directly rather than importing
-// unexported types.
-type channelMetaLine struct {
-	Channel *discordgo.Channel `json:"channel"`
-}
-
-type threadMetaLine struct {
-	Source string             `json:"source"`
-	Thread *discordgo.Channel `json:"thread"`
-}
-
-type messageLine struct {
-	ChannelID   string             `json:"channel_id"`
-	ChannelName string             `json:"channel_name"`
-	ParentID    string             `json:"parent_id"`
-	Message     *discordgo.Message `json:"message"`
-}
+type channelMetaLine = archiveformat.ChannelRecord
+type threadMetaLine = archiveformat.ThreadRecord
+type messageLine = archiveformat.MessageRecord
 
 type archivedMessage struct {
 	Date        string
@@ -364,7 +348,7 @@ func loadContainers(root string) (containers []container, names map[string]strin
 			Type:               channel.Type,
 			ParentID:           channel.ParentID,
 			Position:           channel.Position,
-			CanContainMessages: archive.CanContainMessages(channel.Type),
+			CanContainMessages: archiveformat.CanContainMessages(channel.Type),
 			LastMessageID:      channel.LastMessageID,
 		})
 	}
@@ -530,7 +514,7 @@ func loadAllMessages(root, date string) ([]archivedMessage, error) {
 // attachmentURL builds the path (under the /files/ route) an attachment is
 // served at.
 func attachmentURL(guildID, date, channelID, messageID string, attachment *discordgo.MessageAttachment) string {
-	relPath := archive.AttachmentRelPath(date, channelID, messageID, attachment)
+	relPath := archiveformat.AttachmentRelPath(date, channelID, messageID, attachment)
 	parts := strings.Split(filepath.ToSlash(relPath), "/")
 	for i, p := range parts {
 		parts[i] = url.PathEscape(p)
@@ -543,7 +527,7 @@ func attachmentURL(guildID, date, channelID, messageID string, attachment *disco
 // before the archiver started downloading files (or that failed to download)
 // have metadata only, with no file on disk.
 func hasLocalAttachment(root, date, channelID, messageID string, attachment *discordgo.MessageAttachment) bool {
-	relPath := archive.AttachmentRelPath(date, channelID, messageID, attachment)
+	relPath := archiveformat.AttachmentRelPath(date, channelID, messageID, attachment)
 	_, err := os.Stat(filepath.Join(root, relPath))
 	return err == nil
 }

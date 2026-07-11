@@ -1,0 +1,5 @@
+.git
+.env
+archive
+discord-archiver
+*.test

@@ -2,6 +2,16 @@
 
 Discord bot tokenを使って、指定したDiscordサーバーの見えるチャンネルとメッセージをJSONLに書き出します。
 
+Archiverと閲覧用Viewerを独立したGoアプリとして管理するmonorepoです。
+
+```text
+apps/
+  archiver/       Discordからアーカイブを作成するアプリ
+  viewer/         保存済みアーカイブを閲覧するWebアプリ
+pkg/
+  archiveformat/  両アプリが共有する保存形式の契約
+```
+
 ## Usage
 
 Botを対象サーバーに参加させ、対象チャンネルで `View Channel` と `Read Message History` を付与してください。メッセージ本文、添付、埋め込みなどの本文系フィールドを取得するには、Discord Developer Portalで `MESSAGE_CONTENT` privileged intent も有効化します。
@@ -16,7 +26,7 @@ DISCORD_GUILD_ID=your-guild-id
 オプション無しで起動するとデーモンとして常駐します。デフォルトでは起動直後にスケジュール用タイムゾーン基準の前日分をdumpし、その後は毎日指定時刻に前日分をdumpします。
 
 ```bash
-go run ./cmd/discord-archiver -out-dir archive
+go run ./apps/archiver/cmd/discord-archiver -out-dir archive
 ```
 
 実行時刻とタイムゾーンは環境変数またはフラグで指定できます。フラグの指定が環境変数より優先されます。
@@ -28,7 +38,7 @@ DISCORD_ARCHIVER_RUN_ON_START=true
 ```
 
 ```bash
-go run ./cmd/discord-archiver \
+go run ./apps/archiver/cmd/discord-archiver \
   -out-dir archive \
   -schedule-time 03:00 \
   -timezone Asia/Tokyo
@@ -37,25 +47,25 @@ go run ./cmd/discord-archiver \
 起動直後の前日分dumpを回避する場合は `-no-run-on-start` を付けるか、`DISCORD_ARCHIVER_RUN_ON_START=false` を設定します。
 
 ```bash
-go run ./cmd/discord-archiver -out-dir archive -no-run-on-start
+go run ./apps/archiver/cmd/discord-archiver -out-dir archive -no-run-on-start
 ```
 
 手動で全期間を取得する場合:
 
 ```bash
-go run ./cmd/discord-archiver dump -all -out-dir archive
+go run ./apps/archiver/cmd/discord-archiver dump -all -out-dir archive
 ```
 
 手動で指定したJST日付だけを洗い替える場合:
 
 ```bash
-go run ./cmd/discord-archiver dump -date 2026-07-09 -out-dir archive
+go run ./apps/archiver/cmd/discord-archiver dump -date 2026-07-09 -out-dir archive
 ```
 
 フラグでもBot tokenとguild IDを指定できます。
 
 ```bash
-go run ./cmd/discord-archiver \
+go run ./apps/archiver/cmd/discord-archiver \
   -token 'your-bot-token' \
   -guild 'your-guild-id' \
   -out-dir archive
@@ -64,13 +74,13 @@ go run ./cmd/discord-archiver \
 デフォルトでは通常チャンネルに加えて、アクティブスレッド、公開アーカイブ済みスレッド、Botから見える非公開アーカイブ済みスレッドも取得します。非公開アーカイブ済みスレッドを除外する場合は `-no-private-threads` を付けます。
 
 ```bash
-go run ./cmd/discord-archiver -out-dir archive -no-private-threads
+go run ./apps/archiver/cmd/discord-archiver -out-dir archive -no-private-threads
 ```
 
 デフォルトではメッセージの添付ファイルも実体をダウンロードして保存します。再実行時、既に同じサイズのファイルが保存済みであれば再ダウンロードしません。取得しない場合は `-attachments=false` を付けるか、`DISCORD_ARCHIVER_DOWNLOAD_ATTACHMENTS=false` を設定します。
 
 ```bash
-go run ./cmd/discord-archiver -out-dir archive -attachments=false
+go run ./apps/archiver/cmd/discord-archiver -out-dir archive -attachments=false
 ```
 
 ## Viewer
@@ -78,13 +88,28 @@ go run ./cmd/discord-archiver -out-dir archive -attachments=false
 アーカイブ済みのデータをブラウザで閲覧する簡易ビューワです。Discord bot tokenは不要で、`-out-dir` のアーカイブディレクトリだけで動作します。
 
 ```bash
-go run ./cmd/discord-archiver view -out-dir archive -addr :8080
+go run ./apps/viewer/cmd/discord-archive-viewer -out-dir archive -addr :8080
 ```
 
 `http://localhost:8080/` にアクセスすると、ギルド → チャンネル/スレッド → 日付 → メッセージの順にたどれます。チャンネル一覧の「全チャンネル」から、通常チャンネルとスレッドの投稿を横断した時系列表示も利用できます。メンション・埋め込み・添付ファイル（画像/動画/音声のインライン表示を含む）を簡易的にレンダリングします。チャンネル別画面と全チャンネル画面では「画像」「動画」「音声」「ファイル」「埋め込み」のタブから、各種メディアを新しい順のグリッドで一覧表示できます。添付ファイルの実体はアーカイブディレクトリから直接配信されます。
 
 ```dotenv
-DISCORD_ARCHIVER_VIEW_ADDR=:8080
+DISCORD_ARCHIVE_VIEWER_ADDR=:8080
+```
+
+## Development
+
+ルートの `go.work` に3つのmoduleを登録しています。全moduleのテストと各アプリのビルドは次のように実行します。
+
+```bash
+GOCACHE=/tmp/go-build-cache GOMODCACHE=/tmp/go-mod-cache \
+  go test ./apps/archiver/... ./apps/viewer/... ./pkg/archiveformat/...
+
+GOCACHE=/tmp/go-build-cache GOMODCACHE=/tmp/go-mod-cache \
+  go build -o /tmp/discord-archiver ./apps/archiver/cmd/discord-archiver
+
+GOCACHE=/tmp/go-build-cache GOMODCACHE=/tmp/go-mod-cache \
+  go build -o /tmp/discord-archive-viewer ./apps/viewer/cmd/discord-archive-viewer
 ```
 
 ## Docker
