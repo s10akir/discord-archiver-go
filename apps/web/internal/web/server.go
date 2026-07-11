@@ -79,27 +79,12 @@ func newHandler(archiveDir string, db *sql.DB) (http.Handler, error) {
 		mux.HandleFunc("GET /api/v1/search/options", s.handleAPISearchOptions)
 		mux.HandleFunc("GET /api/v1/search/messages", s.handleAPISearch)
 	}
-	mux.HandleFunc("GET /{$}", s.handleGuilds)
-	mux.HandleFunc("GET /g/{guild}", s.handleChannels)
-	mux.HandleFunc("GET /g/{guild}/all", s.handleAllMessages)
-	mux.HandleFunc("GET /g/{guild}/all/messages", s.handleAllMessagePage)
-	mux.HandleFunc("GET /g/{guild}/c/{channel}", s.handleMessages)
-	mux.HandleFunc("GET /g/{guild}/c/{channel}/messages", s.handleMessagePage)
-	for _, kind := range mediaKinds {
-		mux.HandleFunc("GET /g/{guild}/all/"+string(kind.Kind), s.handleAllMedia(kind))
-		mux.HandleFunc("GET /g/{guild}/all/"+string(kind.Kind)+"/items", s.handleAllMediaPage(kind))
-		mux.HandleFunc("GET /g/{guild}/c/{channel}/"+string(kind.Kind), s.handleMedia(kind))
-		mux.HandleFunc("GET /g/{guild}/c/{channel}/"+string(kind.Kind)+"/items", s.handleMediaPage(kind))
-	}
 	mux.HandleFunc("GET /files/{guild}/{rest...}", s.handleFile)
-	if db != nil {
-		mux.HandleFunc("GET /search", s.handleSearch)
-		mux.HandleFunc("GET /search/messages", s.handleSearchPage)
-	}
 	if db != nil {
 		mux.HandleFunc("PUT /api/v1/import/guilds/{guild}/metadata", s.handleImportMetadata)
 		mux.HandleFunc("PUT /api/v1/import/guilds/{guild}/dates/{date}", s.handleImportDate)
 	}
+	mux.Handle("GET /", frontendHandler())
 	return mux, nil
 }
 

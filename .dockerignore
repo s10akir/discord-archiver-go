@@ -3,3 +3,6 @@
 archive
 discord-archiver
 *.test
+node_modules
+**/node_modules
+*.tsbuildinfo

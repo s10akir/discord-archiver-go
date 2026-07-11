@@ -1,3 +1,5 @@
+//go:build legacyhtml
+
 package web
 
 import (

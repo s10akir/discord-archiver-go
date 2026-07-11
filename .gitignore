@@ -27,3 +27,4 @@
 
 /archive/
 node_modules/
+*.tsbuildinfo

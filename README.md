@@ -95,6 +95,21 @@ DATABASE_URL='postgres://discord_archive:discord_archive@localhost:5432/discord_
 
 `http://localhost:8080/` ではギルド、チャンネル/スレッド、メッセージ、メディアを閲覧できます。`/search` では本文・投稿者・添付名・embedの部分一致と、guild、channel、期間、添付、メディア種別による絞り込みを利用できます。
 
+Web UIはReact、Vite、Tailwind CSS、shadcn/uiをベースにしています。フロントエンドを開発する場合は、別ターミナルでGo APIとVite dev serverを起動します。Viteは`/api`と`/files`を`:8080`へproxyします。
+
+```bash
+cd apps/web/frontend
+npm install
+npm run dev
+```
+
+本番用アセットは次のコマンドで`apps/web/internal/web/frontend`へ生成され、Goバイナリへ埋め込まれます。
+
+```bash
+cd apps/web/frontend
+npm run build
+```
+
 ```dotenv
 DISCORD_ARCHIVE_WEB_ADDR=:8080
 DATABASE_URL=postgres://discord_archive:discord_archive@localhost:5432/discord_archive?sslmode=disable
@@ -116,6 +131,8 @@ DISCORD_ARCHIVE_WEB_URL=http://localhost:8080 \
 ```bash
 GOCACHE=/tmp/go-build-cache GOMODCACHE=/tmp/go-mod-cache \
   go test ./apps/archiver/... ./apps/web/... ./apps/importer/... ./pkg/archiveformat/...
+
+(cd apps/web/frontend && npm run build)
 
 GOCACHE=/tmp/go-build-cache GOMODCACHE=/tmp/go-mod-cache \
   go build -o /tmp/discord-archiver ./apps/archiver/cmd/discord-archiver
