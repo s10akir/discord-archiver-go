@@ -187,7 +187,24 @@ func messageSectionsAPI(sections []messageSection) []apiMessageSection {
 	for _, section := range sections {
 		s := apiMessageSection{Date: section.Date, Messages: []apiMessage{}}
 		for _, m := range section.Messages {
-			s.Messages = append(s.Messages, apiMessage{m.AuthorID, m.AuthorName, m.AvatarURL, m.Timestamp, m.Edited, string(m.Content), m.ReplySnippet, m.Attachments, m.Embeds, m.Reactions, m.ChannelID, m.ChannelName})
+			attachments := m.Attachments
+			if attachments == nil {
+				attachments = []attachmentView{}
+			}
+			embeds := m.Embeds
+			if embeds == nil {
+				embeds = []embedView{}
+			}
+			reactions := m.Reactions
+			if reactions == nil {
+				reactions = []reactionView{}
+			}
+			s.Messages = append(s.Messages, apiMessage{
+				AuthorID: m.AuthorID, AuthorName: m.AuthorName, AvatarURL: m.AvatarURL,
+				Timestamp: m.Timestamp, Edited: m.Edited, ContentHTML: string(m.Content),
+				ReplySnippet: m.ReplySnippet, Attachments: attachments, Embeds: embeds,
+				Reactions: reactions, ChannelID: m.ChannelID, ChannelName: m.ChannelName,
+			})
 		}
 		result = append(result, s)
 	}
@@ -273,6 +290,12 @@ func (s *server) handleAPISearchOptions(w http.ResponseWriter, r *http.Request) 
 	if err != nil {
 		writeJSONError(w, "internal error", 500)
 		return
+	}
+	if channels == nil {
+		channels = []searchOption{}
+	}
+	if authors == nil {
+		authors = []searchOption{}
 	}
 	writeJSON(w, apiSearchOptions{channels, authors})
 }
