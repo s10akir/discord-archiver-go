@@ -96,48 +96,83 @@ func newHandler(archiveDir string, db *sql.DB) (http.Handler, error) {
 }
 
 var searchTemplate = template.Must(template.New("search").Parse(`<!doctype html><html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>アーカイブ検索</title><style>` + baseCSS + `
-.search-form{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px;background:#2b2d31;padding:14px;border-radius:8px;margin-bottom:18px}.search-form label{font-size:12px;color:#b5bac1}.search-form input,.search-form select{display:block;width:100%;margin-top:4px;padding:8px;background:#1e1f22;color:#fff;border:1px solid #4a4d53;border-radius:4px}.search-form button{align-self:end;padding:9px;background:#5865f2;color:white;border:0;border-radius:4px}</style></head><body><header><h1>アーカイブ検索</h1><div class="crumbs"><a href="/">アーカイブ</a></div></header><main><form class="search-form" method="get"><label>キーワード<input name="q" value="{{.Query}}"></label><label>Guild ID<input name="guild" value="{{.Guild}}"></label><label>Channel / Thread ID<input name="channel" value="{{.Channel}}"></label><label>投稿者<input name="author" value="{{.Author}}"></label><label>開始日時<input type="datetime-local" name="from" value="{{.From}}"></label><label>終了日時<input type="datetime-local" name="to" value="{{.To}}"></label><label>添付<select name="attachment"><option value="">指定なし</option><option value="yes">あり</option><option value="no">なし</option></select></label><label>メディア<select name="media"><option value="">指定なし</option><option value="image">画像</option><option value="video">動画</option><option value="audio">音声</option><option value="embed">埋め込み</option></select></label><label>埋め込み<select name="embed"><option value="">指定なし</option><option value="yes">あり</option><option value="no">なし</option></select></label><button>検索</button></form><div id="search-results">{{.Results}}</div><div id="search-sentinel" data-cursor="{{.Cursor}}" data-has-more="{{.HasMore}}"></div><div id="search-status" class="load-status"></div></main><script>
+.search-form{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;background:#2b2d31;padding:14px;border-radius:8px;margin-bottom:18px}.search-field{font-size:12px;color:#b5bac1;position:relative}.search-field>input,.search-field>select{display:block;width:100%;margin-top:4px;padding:8px;background:#1e1f22;color:#fff;border:1px solid #4a4d53;border-radius:4px}.search-submit{align-self:end;padding:9px;background:#5865f2;color:white;border:0;border-radius:4px}.combo-input-wrap{display:flex;gap:4px}.combo-input-wrap input{min-width:0;flex:1}.combo-clear{border:1px solid #4a4d53;background:#383a40;color:#b5bac1;border-radius:4px}.combo-options{position:absolute;z-index:5;top:100%;left:0;right:0;max-height:260px;overflow:auto;background:#1e1f22;border:1px solid #4a4d53;border-radius:4px;box-shadow:0 8px 20px #0008}.combo-options[hidden]{display:none}.combo-option{display:block;width:100%;padding:8px;text-align:left;color:#dbdee1;background:none;border:0}.combo-option:hover,.combo-option.active{background:#404249}.combo-empty{padding:8px;color:#949ba4}</style></head><body><header><h1>アーカイブ検索</h1><div class="crumbs"><a href="/">アーカイブ</a></div></header><main><form class="search-form" method="get">
+<label class="search-field">キーワード<input name="q" value="{{.Query}}"></label>
+<div class="search-field combo" data-combobox><span>チャンネル / スレッド</span><div class="combo-input-wrap"><input class="combo-input" value="{{.ChannelLabel}}" autocomplete="off" role="combobox" aria-autocomplete="list" aria-expanded="false"><button class="combo-clear" type="button" aria-label="チャンネル選択を解除">×</button></div><input class="combo-value" type="hidden" name="channel" value="{{.Channel}}"><div class="combo-options" role="listbox" hidden>{{range .Channels}}<button type="button" class="combo-option" role="option" data-value="{{.Value}}" data-label="{{.Label}}" aria-selected="{{.Selected}}">{{.Label}}</button>{{end}}<div class="combo-empty" hidden>候補がありません</div></div></div>
+<div class="search-field combo" data-combobox><span>投稿者</span><div class="combo-input-wrap"><input class="combo-input" value="{{.AuthorLabel}}" autocomplete="off" role="combobox" aria-autocomplete="list" aria-expanded="false"><button class="combo-clear" type="button" aria-label="投稿者選択を解除">×</button></div><input class="combo-value" type="hidden" name="author" value="{{.Author}}"><div class="combo-options" role="listbox" hidden>{{range .Authors}}<button type="button" class="combo-option" role="option" data-value="{{.Value}}" data-label="{{.Label}}" aria-selected="{{.Selected}}">{{.Label}}</button>{{end}}<div class="combo-empty" hidden>候補がありません</div></div></div>
+<label class="search-field">開始日時<input type="datetime-local" name="from" value="{{.From}}"></label><label class="search-field">終了日時<input type="datetime-local" name="to" value="{{.To}}"></label>
+<label class="search-field">添付<select name="attachment"><option value=""{{if eq .Attachment ""}} selected{{end}}>指定なし</option><option value="yes"{{if eq .Attachment "yes"}} selected{{end}}>あり</option><option value="no"{{if eq .Attachment "no"}} selected{{end}}>なし</option></select></label>
+<label class="search-field">メディア<select name="media"><option value=""{{if eq .Media ""}} selected{{end}}>指定なし</option><option value="image"{{if eq .Media "image"}} selected{{end}}>画像</option><option value="video"{{if eq .Media "video"}} selected{{end}}>動画</option><option value="audio"{{if eq .Media "audio"}} selected{{end}}>音声</option><option value="embed"{{if eq .Media "embed"}} selected{{end}}>埋め込み</option></select></label>
+<label class="search-field">埋め込み<select name="embed"><option value=""{{if eq .Embed ""}} selected{{end}}>指定なし</option><option value="yes"{{if eq .Embed "yes"}} selected{{end}}>あり</option><option value="no"{{if eq .Embed "no"}} selected{{end}}>なし</option></select></label><button class="search-submit">検索</button></form>
+<div id="search-results">{{.Results}}</div><div id="search-sentinel" data-cursor="{{.Cursor}}" data-has-more="{{.HasMore}}"></div><div id="search-status" class="load-status"></div></main><script>
+for(const combo of document.querySelectorAll("[data-combobox]")){const input=combo.querySelector(".combo-input"),value=combo.querySelector(".combo-value"),options=combo.querySelector(".combo-options"),items=Array.from(combo.querySelectorAll(".combo-option")),empty=combo.querySelector(".combo-empty");let active=-1;const open=()=>{options.hidden=false;input.setAttribute("aria-expanded","true")};const close=()=>{options.hidden=true;input.setAttribute("aria-expanded","false");active=-1;items.forEach(item=>item.classList.remove("active"))};const filter=()=>{const query=input.value.trim().toLocaleLowerCase();let visible=0;for(const item of items){const show=item.dataset.label.toLocaleLowerCase().includes(query);item.hidden=!show;if(show)visible++}empty.hidden=visible!==0;active=-1;open()};const choose=item=>{input.value=item.dataset.label;value.value=item.dataset.value;items.forEach(option=>option.setAttribute("aria-selected",String(option===item)));close()};input.addEventListener("focus",filter);input.addEventListener("input",()=>{value.value="";items.forEach(item=>item.setAttribute("aria-selected","false"));filter()});input.addEventListener("keydown",event=>{const visible=items.filter(item=>!item.hidden);if(event.key==="ArrowDown"||event.key==="ArrowUp"){event.preventDefault();open();const step=event.key==="ArrowDown"?1:-1;active=(active+step+visible.length)%visible.length;items.forEach(item=>item.classList.remove("active"));if(visible[active]){visible[active].classList.add("active");visible[active].scrollIntoView({block:"nearest"})}}else if(event.key==="Enter"&&active>=0){event.preventDefault();choose(visible[active])}else if(event.key==="Escape"){close()}});for(const item of items)item.addEventListener("click",()=>choose(item));combo.querySelector(".combo-clear").addEventListener("click",()=>{input.value="";value.value="";items.forEach(item=>item.setAttribute("aria-selected","false"));filter();input.focus()});document.addEventListener("click",event=>{if(!combo.contains(event.target))close()})}
 const sentinel=document.getElementById("search-sentinel"),results=document.getElementById("search-results"),status=document.getElementById("search-status");let loading=false;
-async function loadOlder(){if(loading||sentinel.dataset.hasMore!=="true")return;loading=true;status.textContent="過去の検索結果を読み込み中…";try{const params=new URLSearchParams(location.search);params.set("before",sentinel.dataset.cursor);const response=await fetch("/search/messages?"+params);if(!response.ok)throw new Error(response.status);const page=await response.json();const holder=document.createElement("div");holder.innerHTML=page.html;while(holder.firstChild)results.appendChild(holder.firstChild);sentinel.dataset.cursor=page.next_cursor;sentinel.dataset.hasMore=String(page.has_more);status.textContent=page.has_more?"":"これより古い検索結果はありません。";if(!page.has_more)observer.disconnect()}catch(error){status.textContent="読み込みに失敗しました。スクロールすると再試行します。"}finally{loading=false}}
+async function loadOlder(){if(loading||sentinel.dataset.hasMore!=="true")return;loading=true;status.textContent="過去の検索結果を読み込み中…";try{const params=new URLSearchParams(new FormData(document.querySelector(".search-form")));params.set("before",sentinel.dataset.cursor);const response=await fetch("/search/messages?"+params);if(!response.ok)throw new Error(response.status);const page=await response.json();const holder=document.createElement("div");holder.innerHTML=page.html;while(holder.firstChild)results.appendChild(holder.firstChild);sentinel.dataset.cursor=page.next_cursor;sentinel.dataset.hasMore=String(page.has_more);status.textContent=page.has_more?"":"これより古い検索結果はありません。";if(!page.has_more)observer.disconnect()}catch(error){status.textContent="読み込みに失敗しました。スクロールすると再試行します。"}finally{loading=false}}
 const observer=new IntersectionObserver(entries=>{if(entries.some(entry=>entry.isIntersecting))loadOlder()},{rootMargin:"300px 0px 0px"});if(sentinel.dataset.hasMore==="true")observer.observe(sentinel);
 </script></body></html>`))
 
 type searchPageView struct {
-	Query, Guild, Channel, Author, From, To string
-	Results                                 template.HTML
-	Cursor                                  string
-	HasMore                                 bool
+	Query, Channel, ChannelLabel, Author, AuthorLabel, From, To string
+	Attachment, Media, Embed                                    string
+	Channels, Authors                                           []searchOption
+	Results                                                     template.HTML
+	Cursor                                                      string
+	HasMore                                                     bool
 }
 
 func parseSearchFilter(r *http.Request) searchFilter {
 	q := r.URL.Query()
 	parseTime := func(value string) time.Time { parsed, _ := time.Parse("2006-01-02T15:04", value); return parsed }
-	return searchFilter{GuildID: q.Get("guild"), ChannelID: q.Get("channel"), Author: q.Get("author"), Query: q.Get("q"), Media: q.Get("media"), Attachment: q.Get("attachment"), Embed: q.Get("embed"), From: parseTime(q.Get("from")), To: parseTime(q.Get("to"))}
+	oneOf := func(value string, allowed ...string) string {
+		for _, candidate := range allowed {
+			if value == candidate {
+				return value
+			}
+		}
+		return ""
+	}
+	return searchFilter{ChannelID: q.Get("channel"), Author: q.Get("author"), Query: q.Get("q"), Media: oneOf(q.Get("media"), "image", "video", "audio", "embed"), Attachment: oneOf(q.Get("attachment"), "yes", "no"), Embed: oneOf(q.Get("embed"), "yes", "no"), From: parseTime(q.Get("from")), To: parseTime(q.Get("to"))}
 }
 
 func (s *server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	filter := parseSearchFilter(r)
+	channels, authors, channelFound, authorFound, err := searchOptions(r.Context(), s.db, filter.ChannelID, filter.Author)
+	if err != nil {
+		httpError(w, err)
+		return
+	}
+	if !channelFound {
+		filter.ChannelID = ""
+	}
+	if !authorFound {
+		filter.Author = ""
+	}
 	page, err := searchMessages(r.Context(), s.db, filter, nil, messagePageSize)
 	if err != nil {
 		httpError(w, err)
 		return
 	}
 	names := map[string]string{}
-	if filter.GuildID != "" {
-		_, names, _ = s.containers(r.Context(), filter.GuildID)
-	}
 	var results bytes.Buffer
 	if len(page.Messages) == 0 {
 		results.WriteString(`<p class="empty">条件に一致するメッセージはありません。</p>`)
 	} else {
-		sections := buildMessageSections(guildRoot(s.archiveDir, filter.GuildID), filter.GuildID, page.Messages, names, true)
+		sections := buildMessageSections(guildRoot(s.archiveDir, ""), "", page.Messages, names, true)
 		if err := messagesTemplate.ExecuteTemplate(&results, "sections", sections); err != nil {
 			httpError(w, err)
 			return
 		}
 	}
-	data := searchPageView{Query: q.Get("q"), Guild: q.Get("guild"), Channel: q.Get("channel"), Author: q.Get("author"), From: q.Get("from"), To: q.Get("to"), Results: template.HTML(results.String()), Cursor: encodeCursor(page.NextCursor), HasMore: page.HasMore}
+	selectedLabel := func(options []searchOption) string {
+		for _, option := range options {
+			if option.Selected {
+				return option.Label
+			}
+		}
+		return ""
+	}
+	data := searchPageView{Query: q.Get("q"), Channel: filter.ChannelID, ChannelLabel: selectedLabel(channels), Author: filter.Author, AuthorLabel: selectedLabel(authors), From: q.Get("from"), To: q.Get("to"), Attachment: filter.Attachment, Media: filter.Media, Embed: filter.Embed, Channels: channels, Authors: authors, Results: template.HTML(results.String()), Cursor: encodeCursor(page.NextCursor), HasMore: page.HasMore}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := searchTemplate.Execute(w, data); err != nil {
 		log.Printf("render search: %v", err)
@@ -157,10 +192,7 @@ func (s *server) handleSearchPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	names := map[string]string{}
-	if filter.GuildID != "" {
-		_, names, _ = s.containers(r.Context(), filter.GuildID)
-	}
-	sections := buildMessageSections(guildRoot(s.archiveDir, filter.GuildID), filter.GuildID, page.Messages, names, true)
+	sections := buildMessageSections(guildRoot(s.archiveDir, ""), "", page.Messages, names, true)
 	var fragment bytes.Buffer
 	if err := messagesTemplate.ExecuteTemplate(&fragment, "sections", sections); err != nil {
 		writeJSONError(w, "internal error", http.StatusInternalServerError)

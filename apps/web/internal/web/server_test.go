@@ -609,6 +609,37 @@ func TestSearchResultUsesMessageGuildForAttachmentPath(t *testing.T) {
 	}
 }
 
+func TestSearchTemplateRestoresSelectionsAndOmitsGuildField(t *testing.T) {
+	var output strings.Builder
+	err := searchTemplate.Execute(&output, searchPageView{
+		Channel: "channel1", ChannelLabel: "#general",
+		Author: "author1", AuthorLabel: "alice (…uthor1)",
+		Attachment: "yes", Media: "image", Embed: "no",
+		Channels: []searchOption{{Value: "channel1", Label: "#general", Selected: true}},
+		Authors:  []searchOption{{Value: "author1", Label: "alice (…uthor1)", Selected: true}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	html := output.String()
+	for _, expected := range []string{`name="channel" value="channel1"`, `value="#general"`, `name="author" value="author1"`, `value="yes" selected`, `value="image" selected`, `value="no" selected`} {
+		if !strings.Contains(html, expected) {
+			t.Errorf("HTML does not contain %q", expected)
+		}
+	}
+	if strings.Contains(html, `name="guild"`) {
+		t.Error("HTML contains removed guild field")
+	}
+}
+
+func TestParseSearchFilterIgnoresGuildAndInvalidSelectValues(t *testing.T) {
+	request := httptest.NewRequest(http.MethodGet, "/search?guild=guild1&attachment=invalid&media=invalid&embed=invalid", nil)
+	filter := parseSearchFilter(request)
+	if filter.Attachment != "" || filter.Media != "" || filter.Embed != "" {
+		t.Fatalf("filter = %#v", filter)
+	}
+}
+
 func writeViewerMetadata(t *testing.T, root string) {
 	t.Helper()
 	path := filepath.Join(root, "metadata", "channels.jsonl")

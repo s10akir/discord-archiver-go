@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -56,24 +57,76 @@ type postgresMessageStore struct {
 }
 
 type searchFilter struct {
-	GuildID, ChannelID, Author, Query, Media string
-	From, To                                 time.Time
-	Attachment, Embed                        string
+	ChannelID, Author, Query, Media string
+	From, To                        time.Time
+	Attachment, Embed               string
+}
+
+type searchOption struct {
+	Value    string
+	Label    string
+	Selected bool
+}
+
+func searchOptions(ctx context.Context, db *sql.DB, selectedChannel, selectedAuthor string) ([]searchOption, []searchOption, bool, bool, error) {
+	channelRows, err := db.QueryContext(ctx, `SELECT c.id, CASE WHEN c.is_thread THEN c.name || ' (thread / #' || COALESCE(p.name, '不明') || ')' ELSE '#' || c.name END FROM channels c LEFT JOIN channels p ON p.guild_id=c.guild_id AND p.id=c.parent_id WHERE c.is_thread OR c.type IN (0,2,5,10,11,12) ORDER BY c.is_thread,c.position,lower(c.name),c.id`)
+	if err != nil {
+		return nil, nil, false, false, err
+	}
+	defer channelRows.Close()
+	var channels []searchOption
+	channelFound := selectedChannel == ""
+	for channelRows.Next() {
+		var option searchOption
+		if err := channelRows.Scan(&option.Value, &option.Label); err != nil {
+			return nil, nil, false, false, err
+		}
+		option.Selected = option.Value == selectedChannel
+		channelFound = channelFound || option.Selected
+		channels = append(channels, option)
+	}
+	if err := channelRows.Err(); err != nil {
+		return nil, nil, false, false, err
+	}
+
+	authorRows, err := db.QueryContext(ctx, `SELECT DISTINCT ON (author_id) author_id,display_name FROM authors ORDER BY author_id,observed_at DESC`)
+	if err != nil {
+		return nil, nil, false, false, err
+	}
+	defer authorRows.Close()
+	var authors []searchOption
+	authorFound := selectedAuthor == ""
+	for authorRows.Next() {
+		var option searchOption
+		var name string
+		if err := authorRows.Scan(&option.Value, &name); err != nil {
+			return nil, nil, false, false, err
+		}
+		suffix := option.Value
+		if len(suffix) > 6 {
+			suffix = suffix[len(suffix)-6:]
+		}
+		option.Label = fmt.Sprintf("%s (…%s)", name, suffix)
+		option.Selected = option.Value == selectedAuthor
+		authorFound = authorFound || option.Selected
+		authors = append(authors, option)
+	}
+	if err := authorRows.Err(); err != nil {
+		return nil, nil, false, false, err
+	}
+	sort.Slice(authors, func(i, j int) bool { return strings.ToLower(authors[i].Label) < strings.ToLower(authors[j].Label) })
+	return channels, authors, channelFound, authorFound, nil
 }
 
 func searchMessages(ctx context.Context, db *sql.DB, filter searchFilter, before *messageCursor, limit int) (messagePage, error) {
 	args := []any{}
 	where := []string{"true"}
 	add := func(value any) string { args = append(args, value); return fmt.Sprintf("$%d", len(args)) }
-	if filter.GuildID != "" {
-		where = append(where, "m.guild_id="+add(filter.GuildID))
-	}
 	if filter.ChannelID != "" {
 		where = append(where, "m.channel_id="+add(filter.ChannelID))
 	}
 	if filter.Author != "" {
-		p := add("%" + filter.Author + "%")
-		where = append(where, "(m.author_id="+add(filter.Author)+" OR m.author_name ILIKE "+p+")")
+		where = append(where, "m.author_id="+add(filter.Author))
 	}
 	if filter.Query != "" {
 		p := add("%" + filter.Query + "%")
