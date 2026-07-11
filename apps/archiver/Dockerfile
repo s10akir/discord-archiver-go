@@ -9,5 +9,4 @@ WORKDIR /data
 COPY --from=build /discord-archiver /usr/local/bin/discord-archiver
 ENV TZ=Asia/Tokyo \
     DISCORD_ARCHIVER_SCHEDULE_TIME=03:00
-VOLUME ["/data/archive"]
 ENTRYPOINT ["discord-archiver"]
