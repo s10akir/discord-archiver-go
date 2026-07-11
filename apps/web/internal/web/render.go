@@ -158,6 +158,9 @@ header {
 }
 header h1 { font-size: 16px; margin: 0; color: #f2f3f5; }
 header .crumbs { font-size: 12px; color: #949ba4; margin-top: 4px; }
+.header-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.search-link { color: #fff; background: #5865f2; padding: 7px 11px; border-radius: 5px; font-size: 13px; white-space: nowrap; }
+.search-link:hover { background: #4752c4; text-decoration: none; }
 .view-tabs { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
 .view-tabs a { color: #b5bac1; padding: 5px 9px; border-radius: 4px; font-size: 13px; }
 .view-tabs a:hover { background: #3a3c41; text-decoration: none; }
@@ -260,7 +263,7 @@ var funcMap = template.FuncMap{
 var guildsTemplate = template.Must(template.New("guilds").Funcs(funcMap).Parse(`<!doctype html>
 <html><head><meta charset="utf-8"><title>Discord Archive</title><style>` + baseCSS + `</style></head>
 <body>
-<header><h1>Discord Archive</h1></header>
+<header><div class="header-row"><h1>Discord Archive</h1><a class="search-link" href="/search">検索</a></div></header>
 <main>
 <div class="group"><h2>Guilds</h2>
 <ul class="item-list">
@@ -274,7 +277,7 @@ var guildsTemplate = template.Must(template.New("guilds").Funcs(funcMap).Parse(`
 var channelsTemplate = template.Must(template.New("channels").Funcs(funcMap).Parse(`<!doctype html>
 <html><head><meta charset="utf-8"><title>{{.GuildID}} - Discord Archive</title><style>` + baseCSS + `</style></head>
 <body>
-<header><h1>Guild {{.GuildID}}</h1><div class="crumbs"><a href="/">&laquo; guilds</a></div></header>
+<header><div class="header-row"><h1>Guild {{.GuildID}}</h1><a class="search-link" href="/search?guild={{.GuildID}}">このGuildを検索</a></div><div class="crumbs"><a href="/">&laquo; guilds</a></div></header>
 <main>
 <div class="group"><h2>横断表示</h2><ul class="item-list"><li><a href="/g/{{.GuildID}}/all">全チャンネル</a></li></ul></div>
 {{if not .Groups}}<p class="empty">チャンネルが見つかりませんでした。</p>{{end}}
@@ -303,7 +306,7 @@ var messagesTemplate = template.Must(template.New("messages").Funcs(funcMap).Par
 </div>
 <script>document.body.classList.add("initial-loading");document.body.setAttribute("aria-busy", "true");document.getElementById("initial-loader").setAttribute("aria-hidden", "false");</script>
 <header>
-<h1>{{.Title}}</h1>
+<div class="header-row"><h1>{{.Title}}</h1><a class="search-link" href="/search?guild={{.GuildID}}{{if not .All}}&amp;channel={{.Channel.ID}}{{end}}">検索</a></div>
 <div class="crumbs"><a href="/g/{{.GuildID}}">&laquo; channels</a></div>
 <nav class="view-tabs" aria-label="表示切替"><a class="active" href="{{.BasePath}}">メッセージ</a><a href="{{.BasePath}}/images">画像</a><a href="{{.BasePath}}/videos">動画</a><a href="{{.BasePath}}/audio">音声</a><a href="{{.BasePath}}/files">ファイル</a><a href="{{.BasePath}}/embeds">埋め込み</a></nav>
 </header>
@@ -472,7 +475,7 @@ var mediaTemplate = template.Must(template.New("media").Funcs(funcMap).Parse(`<!
 <html><head><meta charset="utf-8"><title>{{.Title}} {{.Kind.Label}} - Discord Archive</title><style>` + baseCSS + `</style></head>
 <body>
 <header>
-<h1>{{.Title}}</h1>
+<div class="header-row"><h1>{{.Title}}</h1><a class="search-link" href="/search?guild={{.GuildID}}{{if not .All}}&amp;channel={{.Channel.ID}}{{end}}">検索</a></div>
 <div class="crumbs"><a href="/g/{{.GuildID}}">&laquo; channels</a></div>
 <nav class="view-tabs" aria-label="表示切替"><a href="{{.BasePath}}">メッセージ</a>{{range .Kinds}}<a{{if eq $.Kind.Kind .Kind}} class="active"{{end}} href="{{$.BasePath}}/{{.Kind}}">{{.Label}}</a>{{end}}</nav>
 </header>
