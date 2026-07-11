@@ -85,10 +85,49 @@ func newHandler(archiveDir string, db *sql.DB) (http.Handler, error) {
 	}
 	mux.HandleFunc("GET /files/{guild}/{rest...}", s.handleFile)
 	if db != nil {
+		mux.HandleFunc("GET /search", s.handleSearch)
+	}
+	if db != nil {
 		mux.HandleFunc("PUT /api/v1/import/guilds/{guild}/metadata", s.handleImportMetadata)
 		mux.HandleFunc("PUT /api/v1/import/guilds/{guild}/dates/{date}", s.handleImportDate)
 	}
 	return mux, nil
+}
+
+var searchTemplate = template.Must(template.New("search").Parse(`<!doctype html><html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>アーカイブ検索</title><style>` + baseCSS + `
+.search-form{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px;background:#2b2d31;padding:14px;border-radius:8px;margin-bottom:18px}.search-form label{font-size:12px;color:#b5bac1}.search-form input,.search-form select{display:block;width:100%;margin-top:4px;padding:8px;background:#1e1f22;color:#fff;border:1px solid #4a4d53;border-radius:4px}.search-form button{align-self:end;padding:9px;background:#5865f2;color:white;border:0;border-radius:4px}</style></head><body><header><h1>アーカイブ検索</h1><div class="crumbs"><a href="/">アーカイブ</a></div></header><main><form class="search-form" method="get"><label>キーワード<input name="q" value="{{.Query}}"></label><label>Guild ID<input name="guild" value="{{.Guild}}"></label><label>Channel / Thread ID<input name="channel" value="{{.Channel}}"></label><label>投稿者<input name="author" value="{{.Author}}"></label><label>開始日時<input type="datetime-local" name="from" value="{{.From}}"></label><label>終了日時<input type="datetime-local" name="to" value="{{.To}}"></label><label>添付<select name="attachment"><option value="">指定なし</option><option value="yes">あり</option><option value="no">なし</option></select></label><label>メディア<select name="media"><option value="">指定なし</option><option value="image">画像</option><option value="video">動画</option><option value="audio">音声</option><option value="embed">埋め込み</option></select></label><label>埋め込み<select name="embed"><option value="">指定なし</option><option value="yes">あり</option><option value="no">なし</option></select></label><button>検索</button></form>{{.Results}}</main></body></html>`))
+
+func (s *server) handleSearch(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	parseTime := func(value string) time.Time { parsed, _ := time.Parse("2006-01-02T15:04", value); return parsed }
+	filter := searchFilter{GuildID: q.Get("guild"), ChannelID: q.Get("channel"), Author: q.Get("author"), Query: q.Get("q"), Media: q.Get("media"), Attachment: q.Get("attachment"), Embed: q.Get("embed"), From: parseTime(q.Get("from")), To: parseTime(q.Get("to"))}
+	messages, err := searchMessages(r.Context(), s.db, filter, messagePageSize)
+	if err != nil {
+		httpError(w, err)
+		return
+	}
+	names := map[string]string{}
+	if filter.GuildID != "" {
+		_, names, _ = s.containers(r.Context(), filter.GuildID)
+	}
+	var results bytes.Buffer
+	if len(messages) == 0 {
+		results.WriteString(`<p class="empty">条件に一致するメッセージはありません。</p>`)
+	} else {
+		sections := buildMessageSections(guildRoot(s.archiveDir, filter.GuildID), filter.GuildID, messages, names, true)
+		if err := messagesTemplate.ExecuteTemplate(&results, "sections", sections); err != nil {
+			httpError(w, err)
+			return
+		}
+	}
+	data := struct {
+		Query, Guild, Channel, Author, From, To string
+		Results                                 template.HTML
+	}{q.Get("q"), q.Get("guild"), q.Get("channel"), q.Get("author"), q.Get("from"), q.Get("to"), template.HTML(results.String())}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if err := searchTemplate.Execute(w, data); err != nil {
+		log.Printf("render search: %v", err)
+	}
 }
 
 // Run serves the web application on addr until ctx is cancelled.

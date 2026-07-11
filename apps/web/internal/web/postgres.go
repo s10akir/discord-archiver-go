@@ -55,6 +55,80 @@ type postgresMessageStore struct {
 	guildID string
 }
 
+type searchFilter struct {
+	GuildID, ChannelID, Author, Query, Media string
+	From, To                                 time.Time
+	Attachment, Embed                        string
+}
+
+func searchMessages(ctx context.Context, db *sql.DB, filter searchFilter, limit int) ([]archivedMessage, error) {
+	args := []any{}
+	where := []string{"true"}
+	add := func(value any) string { args = append(args, value); return fmt.Sprintf("$%d", len(args)) }
+	if filter.GuildID != "" {
+		where = append(where, "m.guild_id="+add(filter.GuildID))
+	}
+	if filter.ChannelID != "" {
+		where = append(where, "m.channel_id="+add(filter.ChannelID))
+	}
+	if filter.Author != "" {
+		p := add("%" + filter.Author + "%")
+		where = append(where, "(m.author_id="+add(filter.Author)+" OR m.author_name ILIKE "+p+")")
+	}
+	if filter.Query != "" {
+		p := add("%" + filter.Query + "%")
+		where = append(where, "(m.content ILIKE "+p+" OR m.author_name ILIKE "+p+" OR m.embed_text ILIKE "+p+" OR EXISTS (SELECT 1 FROM attachments aq WHERE aq.guild_id=m.guild_id AND aq.message_id=m.id AND aq.filename ILIKE "+p+"))")
+	}
+	if !filter.From.IsZero() {
+		where = append(where, "m.timestamp >= "+add(filter.From))
+	}
+	if !filter.To.IsZero() {
+		where = append(where, "m.timestamp < "+add(filter.To))
+	}
+	if filter.Attachment == "yes" {
+		where = append(where, "m.has_attachments")
+	}
+	if filter.Attachment == "no" {
+		where = append(where, "NOT m.has_attachments")
+	}
+	if filter.Embed == "yes" {
+		where = append(where, "m.has_embeds")
+	}
+	if filter.Embed == "no" {
+		where = append(where, "NOT m.has_embeds")
+	}
+	if filter.Media != "" {
+		if filter.Media == "embed" {
+			where = append(where, "m.has_embeds")
+		} else {
+			pattern := filter.Media + "/%"
+			where = append(where, "EXISTS (SELECT 1 FROM attachments am WHERE am.guild_id=m.guild_id AND am.message_id=m.id AND lower(am.content_type) LIKE "+add(pattern)+")")
+		}
+	}
+	args = append(args, limit)
+	query := `SELECT m.archive_date::text,m.channel_id,COALESCE(c.name,''),m.payload FROM messages m LEFT JOIN channels c ON c.guild_id=m.guild_id AND c.id=m.channel_id WHERE ` + strings.Join(where, " AND ") + fmt.Sprintf(` ORDER BY m.timestamp DESC,m.id DESC LIMIT $%d`, len(args))
+	rows, err := db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []archivedMessage
+	for rows.Next() {
+		var item archivedMessage
+		var payload []byte
+		if err := rows.Scan(&item.Date, &item.ChannelID, &item.ChannelName, &payload); err != nil {
+			return nil, err
+		}
+		var message discordgo.Message
+		if err := json.Unmarshal(payload, &message); err != nil {
+			return nil, err
+		}
+		item.Message = &message
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
 func (s postgresMessageStore) Page(channelID string, before *messageCursor, limit int) (messagePage, error) {
 	page, err := s.query(channelID, "", before, limit)
 	if err == nil {
