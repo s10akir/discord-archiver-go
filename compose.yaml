@@ -14,10 +14,10 @@ services:
       - ./archive:/data/archive
     command: ["-out-dir", "/data/archive"]
 
-  discord-archive-viewer:
+  discord-archive-web:
     build:
       context: .
-      dockerfile: apps/viewer/Dockerfile
+      dockerfile: apps/web/Dockerfile
     restart: unless-stopped
     ports:
       - "8080:8080"

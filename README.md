@@ -2,12 +2,12 @@
 
 Discord bot tokenを使って、指定したDiscordサーバーの見えるチャンネルとメッセージをJSONLに書き出します。
 
-Archiverと閲覧用Viewerを独立したGoアプリとして管理するmonorepoです。
+Archiverと閲覧用Webアプリを独立したGoアプリとして管理するmonorepoです。
 
 ```text
 apps/
   archiver/       Discordからアーカイブを作成するアプリ
-  viewer/         保存済みアーカイブを閲覧するWebアプリ
+  web/            保存済みアーカイブを閲覧するWebアプリ
 pkg/
   archiveformat/  両アプリが共有する保存形式の契約
 ```
@@ -83,18 +83,18 @@ go run ./apps/archiver/cmd/discord-archiver -out-dir archive -no-private-threads
 go run ./apps/archiver/cmd/discord-archiver -out-dir archive -attachments=false
 ```
 
-## Viewer
+## Web
 
 アーカイブ済みのデータをブラウザで閲覧する簡易ビューワです。Discord bot tokenは不要で、`-out-dir` のアーカイブディレクトリだけで動作します。
 
 ```bash
-go run ./apps/viewer/cmd/discord-archive-viewer -out-dir archive -addr :8080
+go run ./apps/web/cmd/discord-archive-web -out-dir archive -addr :8080
 ```
 
 `http://localhost:8080/` にアクセスすると、ギルド → チャンネル/スレッド → 日付 → メッセージの順にたどれます。チャンネル一覧の「全チャンネル」から、通常チャンネルとスレッドの投稿を横断した時系列表示も利用できます。メンション・埋め込み・添付ファイル（画像/動画/音声のインライン表示を含む）を簡易的にレンダリングします。チャンネル別画面と全チャンネル画面では「画像」「動画」「音声」「ファイル」「埋め込み」のタブから、各種メディアを新しい順のグリッドで一覧表示できます。添付ファイルの実体はアーカイブディレクトリから直接配信されます。
 
 ```dotenv
-DISCORD_ARCHIVE_VIEWER_ADDR=:8080
+DISCORD_ARCHIVE_WEB_ADDR=:8080
 ```
 
 ## Development
@@ -103,13 +103,13 @@ DISCORD_ARCHIVE_VIEWER_ADDR=:8080
 
 ```bash
 GOCACHE=/tmp/go-build-cache GOMODCACHE=/tmp/go-mod-cache \
-  go test ./apps/archiver/... ./apps/viewer/... ./pkg/archiveformat/...
+  go test ./apps/archiver/... ./apps/web/... ./pkg/archiveformat/...
 
 GOCACHE=/tmp/go-build-cache GOMODCACHE=/tmp/go-mod-cache \
   go build -o /tmp/discord-archiver ./apps/archiver/cmd/discord-archiver
 
 GOCACHE=/tmp/go-build-cache GOMODCACHE=/tmp/go-mod-cache \
-  go build -o /tmp/discord-archive-viewer ./apps/viewer/cmd/discord-archive-viewer
+  go build -o /tmp/discord-archive-web ./apps/web/cmd/discord-archive-web
 ```
 
 ## Docker
@@ -121,26 +121,26 @@ DISCORD_BOT_TOKEN=your-bot-token
 DISCORD_GUILD_ID=your-guild-id
 ```
 
-ComposeでArchiverとViewerを起動します。両サービスはホストの `./archive` を共有し、Viewerからはread-onlyでマウントされます。
+ComposeでArchiverとWebを起動します。両サービスはホストの `./archive` を共有し、Webからはread-onlyでマウントされます。
 
 ```bash
 docker compose up -d --build
 ```
 
-Viewerはホストの8080番ポートで公開されます。
+Webはホストの8080番ポートで公開されます。
 
 各アプリのイメージを個別にビルドする場合:
 
 ```bash
 docker build -f apps/archiver/Dockerfile -t discord-archiver .
-docker build -f apps/viewer/Dockerfile -t discord-archive-viewer .
+docker build -f apps/web/Dockerfile -t discord-archive-web .
 ```
 
 `main` ブランチが更新されると、GitHub Actionsがamd64/arm64向けのイメージをGHCRへ公開します。
 
 ```bash
 docker pull ghcr.io/s10akir/discord-archiver:latest
-docker pull ghcr.io/s10akir/discord-archive-viewer:latest
+docker pull ghcr.io/s10akir/discord-archive-web:latest
 ```
 
 各イメージには `latest` に加えて、公開元のコミットを特定できる `sha-<短縮コミットSHA>` タグが付きます。Pull Requestではイメージを公開せず、両プラットフォーム向けのビルドだけを検証します。

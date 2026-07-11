@@ -1,6 +1,6 @@
-// Package viewer serves a read-only browser UI over an archive directory
+// Package web serves the archive browser web application.
 // without needing a Discord token.
-package viewer
+package web
 
 import (
 	"bufio"
@@ -281,7 +281,7 @@ func decodeCursor(value string) (*messageCursor, error) {
 	return &cursor, nil
 }
 
-// container holds the channel metadata needed by the viewer. It includes
+// container holds the channel metadata needed by the web app. It includes
 // categories and forum parents as well as message-bearing channels and
 // threads so the channel list can reproduce Discord's hierarchy.
 type container struct {

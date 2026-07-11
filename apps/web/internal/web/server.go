@@ -1,4 +1,4 @@
-package viewer
+package web
 
 import (
 	"bytes"
@@ -25,7 +25,7 @@ type server struct {
 
 const messagePageSize = 100
 
-// NewHandler builds the viewer's HTTP handler rooted at archiveDir, the same
+// NewHandler builds the web application's HTTP handler rooted at archiveDir, the same
 // -out-dir passed to `dump`/the daemon.
 func NewHandler(archiveDir string) (http.Handler, error) {
 	info, err := os.Stat(archiveDir)
@@ -60,7 +60,7 @@ func NewHandler(archiveDir string) (http.Handler, error) {
 	return mux, nil
 }
 
-// Run serves the viewer on addr until ctx is cancelled.
+// Run serves the web application on addr until ctx is cancelled.
 func Run(ctx context.Context, archiveDir, addr string) error {
 	handler, err := NewHandler(archiveDir)
 	if err != nil {
@@ -70,7 +70,7 @@ func Run(ctx context.Context, archiveDir, addr string) error {
 	server := &http.Server{Addr: addr, Handler: handler}
 	errCh := make(chan error, 1)
 	go func() {
-		log.Printf("viewer listening on %s (archive: %s)", addr, archiveDir)
+		log.Printf("web listening on %s (archive: %s)", addr, archiveDir)
 		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			errCh <- err
 			return

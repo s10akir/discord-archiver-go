@@ -23,9 +23,9 @@ jobs:
           - name: discord-archiver
             dockerfile: apps/archiver/Dockerfile
             image: ghcr.io/s10akir/discord-archiver
-          - name: discord-archive-viewer
-            dockerfile: apps/viewer/Dockerfile
-            image: ghcr.io/s10akir/discord-archive-viewer
+          - name: discord-archive-web
+            dockerfile: apps/web/Dockerfile
+            image: ghcr.io/s10akir/discord-archive-web
 
     steps:
       - name: Check out repository

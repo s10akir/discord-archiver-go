@@ -14,7 +14,7 @@ func TestParseDefaults(t *testing.T) {
 
 func TestParseEnvironmentAndFlagPriority(t *testing.T) {
 	config, err := Parse([]string{"-out-dir", "data", "-addr", ":9090"}, func(key string) string {
-		if key == "DISCORD_ARCHIVE_VIEWER_ADDR" {
+		if key == "DISCORD_ARCHIVE_WEB_ADDR" {
 			return ":8081"
 		}
 		return ""

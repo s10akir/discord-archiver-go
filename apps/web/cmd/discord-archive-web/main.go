@@ -7,9 +7,9 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/s10akir/discord-archiver-go/apps/viewer/internal/cli"
-	"github.com/s10akir/discord-archiver-go/apps/viewer/internal/dotenv"
-	"github.com/s10akir/discord-archiver-go/apps/viewer/internal/viewer"
+	"github.com/s10akir/discord-archiver-go/apps/web/internal/cli"
+	"github.com/s10akir/discord-archiver-go/apps/web/internal/dotenv"
+	"github.com/s10akir/discord-archiver-go/apps/web/internal/web"
 )
 
 func main() {
@@ -22,7 +22,7 @@ func main() {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	if err := viewer.Run(ctx, config.ArchiveDir, config.Addr); err != nil {
+	if err := web.Run(ctx, config.ArchiveDir, config.Addr); err != nil {
 		log.Fatal(err)
 	}
 }

@@ -1,4 +1,4 @@
-package viewer
+package web
 
 import (
 	"encoding/json"

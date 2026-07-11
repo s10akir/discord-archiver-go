@@ -1,4 +1,4 @@
-module github.com/s10akir/discord-archiver-go/apps/viewer
+module github.com/s10akir/discord-archiver-go/apps/web
 
 go 1.26.4
 

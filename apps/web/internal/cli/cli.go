@@ -1,4 +1,4 @@
-// Package cli parses viewer command-line arguments and environment variables.
+// Package cli parses web command-line arguments and environment variables.
 package cli
 
 import (
@@ -16,15 +16,15 @@ type Config struct {
 }
 
 func Parse(args []string, getenv func(string) string) (Config, error) {
-	addr := strings.TrimSpace(getenv("DISCORD_ARCHIVE_VIEWER_ADDR"))
+	addr := strings.TrimSpace(getenv("DISCORD_ARCHIVE_WEB_ADDR"))
 	if addr == "" {
 		addr = defaultAddr
 	}
 	config := Config{ArchiveDir: "archive", Addr: addr}
-	flags := flag.NewFlagSet("discord-archive-viewer", flag.ContinueOnError)
+	flags := flag.NewFlagSet("discord-archive-web", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
 	flags.StringVar(&config.ArchiveDir, "out-dir", config.ArchiveDir, "Archive directory to browse.")
-	flags.StringVar(&config.Addr, "addr", config.Addr, "Address to serve the viewer on.")
+	flags.StringVar(&config.Addr, "addr", config.Addr, "Address to serve the web app on.")
 	if err := flags.Parse(args); err != nil {
 		return Config{}, err
 	}
