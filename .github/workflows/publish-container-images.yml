@@ -26,6 +26,9 @@ jobs:
           - name: discord-archive-web
             dockerfile: apps/web/Dockerfile
             image: ghcr.io/s10akir/discord-archive-web
+          - name: discord-archive-importer
+            dockerfile: apps/importer/Dockerfile
+            image: ghcr.io/s10akir/discord-archive-importer
 
     steps:
       - name: Check out repository
