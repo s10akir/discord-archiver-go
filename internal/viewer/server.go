@@ -48,6 +48,8 @@ func NewHandler(archiveDir string) (http.Handler, error) {
 	mux.HandleFunc("GET /g/{guild}", s.handleChannels)
 	mux.HandleFunc("GET /g/{guild}/c/{channel}", s.handleMessages)
 	mux.HandleFunc("GET /g/{guild}/c/{channel}/messages", s.handleMessagePage)
+	mux.HandleFunc("GET /g/{guild}/c/{channel}/media", s.handleMedia)
+	mux.HandleFunc("GET /g/{guild}/c/{channel}/media/items", s.handleMediaPage)
 	mux.HandleFunc("GET /files/{guild}/{rest...}", s.handleFile)
 	return mux, nil
 }
@@ -207,6 +209,94 @@ func (s *server) handleMessagePage(w http.ResponseWriter, r *http.Request) {
 	}{fragment.String(), encodeCursor(page.NextCursor), page.HasMore}); err != nil {
 		log.Printf("encode message page: %v", err)
 	}
+}
+
+type mediaItem struct {
+	AuthorName string
+	Timestamp  string
+	Attachment *attachmentView
+	Embed      *embedView
+}
+
+func (s *server) handleMedia(w http.ResponseWriter, r *http.Request) {
+	guildID := r.PathValue("guild")
+	channelID := r.PathValue("channel")
+	root := guildRoot(s.archiveDir, guildID)
+
+	containers, names, err := loadContainers(root)
+	if err != nil {
+		httpError(w, err)
+		return
+	}
+	channel, ok := findContainer(containers, channelID)
+	if !ok {
+		channel = container{ID: channelID, Name: channelID}
+	}
+	page, err := s.newMessageStore(root).MediaPage(channelID, nil, messagePageSize)
+	if err != nil {
+		httpError(w, err)
+		return
+	}
+	items := buildMediaItems(root, guildID, channelID, page.Messages, names)
+	render(w, mediaTemplate, struct {
+		GuildID string
+		Channel container
+		Items   []mediaItem
+		Cursor  string
+		HasMore bool
+	}{guildID, channel, items, encodeCursor(page.NextCursor), page.HasMore})
+}
+
+func (s *server) handleMediaPage(w http.ResponseWriter, r *http.Request) {
+	guildID := r.PathValue("guild")
+	channelID := r.PathValue("channel")
+	root := guildRoot(s.archiveDir, guildID)
+	cursor, err := decodeCursor(r.URL.Query().Get("before"))
+	if err != nil {
+		writeJSONError(w, "invalid cursor", http.StatusBadRequest)
+		return
+	}
+	_, names, err := loadContainers(root)
+	if err != nil {
+		log.Printf("viewer error: %v", err)
+		writeJSONError(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	page, err := s.newMessageStore(root).MediaPage(channelID, cursor, messagePageSize)
+	if err != nil {
+		log.Printf("viewer error: %v", err)
+		writeJSONError(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	items := buildMediaItems(root, guildID, channelID, page.Messages, names)
+	var fragment bytes.Buffer
+	if err := mediaTemplate.ExecuteTemplate(&fragment, "media-items", items); err != nil {
+		log.Printf("viewer error: %v", err)
+		writeJSONError(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	if err := json.NewEncoder(w).Encode(struct {
+		HTML       string `json:"html"`
+		NextCursor string `json:"next_cursor"`
+		HasMore    bool   `json:"has_more"`
+	}{fragment.String(), encodeCursor(page.NextCursor), page.HasMore}); err != nil {
+		log.Printf("encode media page: %v", err)
+	}
+}
+
+func buildMediaItems(root, guildID, channelID string, messages []archivedMessage, names map[string]string) []mediaItem {
+	var items []mediaItem
+	for _, archived := range messages {
+		view := buildMessageView(root, guildID, archived.Date, channelID, archived.Message, names)
+		for i := range view.Attachments {
+			items = append(items, mediaItem{AuthorName: view.AuthorName, Timestamp: view.Timestamp, Attachment: &view.Attachments[i]})
+		}
+		for i := range view.Embeds {
+			items = append(items, mediaItem{AuthorName: view.AuthorName, Timestamp: view.Timestamp, Embed: &view.Embeds[i]})
+		}
+	}
+	return items
 }
 
 func writeJSONError(w http.ResponseWriter, message string, status int) {

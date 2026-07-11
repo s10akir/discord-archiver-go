@@ -96,6 +96,51 @@ func TestJSONLMessageStoreOrdersEqualTimestampsByID(t *testing.T) {
 	}
 }
 
+func TestJSONLMessageStoreMediaPageSkipsTextAndPagesNewestFirst(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "guild_id=guild1")
+	base := time.Date(2026, 7, 11, 0, 0, 0, 0, time.UTC)
+	messages := make([]*discordgo.Message, 0, 202)
+	for i := 0; i < 101; i++ {
+		text := testMessage(fmt.Sprintf("text-%03d", i), base.Add(time.Duration(i*2)*time.Second).Format(time.RFC3339), "text only", nil)
+		media := testMessage(fmt.Sprintf("media-%03d", i), base.Add(time.Duration(i*2+1)*time.Second).Format(time.RFC3339), "", nil)
+		media.Embeds = []*discordgo.MessageEmbed{{Title: fmt.Sprintf("embed-%03d", i)}}
+		messages = append(messages, text, media)
+	}
+	writeViewerMessages(t, root, "2026-07-11", messages...)
+
+	store := jsonlMessageStore{root: root}
+	latest, err := store.MediaPage("channel1", nil, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := len(latest.Messages), 100; got != want {
+		t.Fatalf("latest media page length = %d, want %d", got, want)
+	}
+	if got, want := latest.Messages[0].Message.ID, "media-100"; got != want {
+		t.Fatalf("first media ID = %q, want %q", got, want)
+	}
+	if got, want := latest.Messages[99].Message.ID, "media-001"; got != want {
+		t.Fatalf("last media ID = %q, want %q", got, want)
+	}
+	if !latest.HasMore || latest.NextCursor == nil {
+		t.Fatal("latest media page does not report older media")
+	}
+
+	older, err := store.MediaPage("channel1", latest.NextCursor, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := len(older.Messages), 1; got != want {
+		t.Fatalf("older media page length = %d, want %d", got, want)
+	}
+	if got, want := older.Messages[0].Message.ID, "media-000"; got != want {
+		t.Fatalf("older media ID = %q, want %q", got, want)
+	}
+	if older.HasMore || older.NextCursor != nil {
+		t.Fatal("oldest media page reports another page")
+	}
+}
+
 func TestChannelPageShowsAllDatesInChronologicalOrder(t *testing.T) {
 	archiveDir := t.TempDir()
 	root := filepath.Join(archiveDir, "guild_id=guild1")
@@ -201,6 +246,77 @@ func TestChannelPageWithoutMessagesShowsEmptyState(t *testing.T) {
 	}
 	if !strings.Contains(recorder.Body.String(), "アーカイブされたメッセージがありません。") {
 		t.Fatal("response does not contain empty state")
+	}
+}
+
+func TestMediaPageRendersEachAttachmentAndEmbedAsACard(t *testing.T) {
+	archiveDir := t.TempDir()
+	root := filepath.Join(archiveDir, "guild_id=guild1")
+	writeViewerMetadata(t, root)
+	textMessage := testMessage("text", "2026-07-11T08:00:00Z", "text only marker", nil)
+	message := testMessage("mixed", "2026-07-11T09:00:00Z", "hidden body marker", nil)
+	message.Attachments = []*discordgo.MessageAttachment{
+		{ID: "image", Filename: "photo.png", ContentType: "image/png", Size: 12},
+		{ID: "file", Filename: "notes.txt", ContentType: "text/plain", Size: 24},
+	}
+	message.Embeds = []*discordgo.MessageEmbed{{Title: "preview"}, {}}
+	writeViewerMessages(t, root, "2026-07-11", textMessage, message)
+
+	handler, err := NewHandler(archiveDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/g/guild1/c/channel1/media", nil))
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusOK)
+	}
+	body := recorder.Body.String()
+	if got, want := strings.Count(body, `class="media-card"`), 4; got != want {
+		t.Fatalf("media card count = %d, want %d", got, want)
+	}
+	for _, want := range []string{"photo.png", "notes.txt", "preview", "埋め込み", "alice", "メッセージ", "メディア", "IntersectionObserver"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("response does not contain %q", want)
+		}
+	}
+	for _, unwanted := range []string{"text only marker", "hidden body marker"} {
+		if strings.Contains(body, unwanted) {
+			t.Errorf("response unexpectedly contains %q", unwanted)
+		}
+	}
+}
+
+func TestMediaPageWithoutMediaShowsEmptyState(t *testing.T) {
+	archiveDir := t.TempDir()
+	root := filepath.Join(archiveDir, "guild_id=guild1")
+	writeViewerMetadata(t, root)
+	writeViewerMessages(t, root, "2026-07-11", testMessage("text", "2026-07-11T08:00:00Z", "text only", nil))
+
+	handler, err := NewHandler(archiveDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/g/guild1/c/channel1/media", nil))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusOK)
+	}
+	if !strings.Contains(recorder.Body.String(), "アーカイブされたメディアがありません。") {
+		t.Fatal("response does not contain media empty state")
+	}
+}
+
+func TestMediaItemsRejectsInvalidCursor(t *testing.T) {
+	handler, err := NewHandler(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/g/guild1/c/channel1/media/items?before=invalid", nil))
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusBadRequest)
 	}
 }
 
