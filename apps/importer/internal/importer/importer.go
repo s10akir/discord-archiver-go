@@ -38,20 +38,29 @@ func New(config Config) *Runner {
 }
 
 func (r *Runner) Run(ctx context.Context) error {
-	if err := r.Sync(ctx); err != nil {
-		log.Printf("initial sync: %v", err)
-	}
-	ticker := time.NewTicker(r.config.Interval)
-	defer ticker.Stop()
+	delay := time.Duration(0)
+	maxDelay := r.config.Interval * 16
 	for {
+		timer := time.NewTimer(delay)
 		select {
 		case <-ctx.Done():
+			timer.Stop()
 			return nil
-		case <-ticker.C:
-			if err := r.Sync(ctx); err != nil {
-				log.Printf("sync: %v", err)
-			}
+		case <-timer.C:
 		}
+		if err := r.Sync(ctx); err != nil {
+			log.Printf("sync failed; retrying: %v", err)
+			if delay < r.config.Interval {
+				delay = r.config.Interval
+			} else {
+				delay *= 2
+			}
+			if delay > maxDelay {
+				delay = maxDelay
+			}
+			continue
+		}
+		delay = r.config.Interval
 	}
 }
 
