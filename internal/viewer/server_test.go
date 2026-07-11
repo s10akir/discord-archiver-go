@@ -96,7 +96,7 @@ func TestJSONLMessageStoreOrdersEqualTimestampsByID(t *testing.T) {
 	}
 }
 
-func TestJSONLMessageStoreMediaPageSkipsTextAndPagesNewestFirst(t *testing.T) {
+func TestJSONLMessageStoreMediaPageSkipsOtherKindsAndPagesNewestFirst(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "guild_id=guild1")
 	base := time.Date(2026, 7, 11, 0, 0, 0, 0, time.UTC)
 	messages := make([]*discordgo.Message, 0, 202)
@@ -109,7 +109,7 @@ func TestJSONLMessageStoreMediaPageSkipsTextAndPagesNewestFirst(t *testing.T) {
 	writeViewerMessages(t, root, "2026-07-11", messages...)
 
 	store := jsonlMessageStore{root: root}
-	latest, err := store.MediaPage("channel1", nil, 100)
+	latest, err := store.MediaPage("channel1", mediaEmbed, nil, 100)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -126,7 +126,7 @@ func TestJSONLMessageStoreMediaPageSkipsTextAndPagesNewestFirst(t *testing.T) {
 		t.Fatal("latest media page does not report older media")
 	}
 
-	older, err := store.MediaPage("channel1", latest.NextCursor, 100)
+	older, err := store.MediaPage("channel1", mediaEmbed, latest.NextCursor, 100)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -249,7 +249,7 @@ func TestChannelPageWithoutMessagesShowsEmptyState(t *testing.T) {
 	}
 }
 
-func TestMediaPageRendersEachAttachmentAndEmbedAsACard(t *testing.T) {
+func TestMediaKindPagesRenderOnlyMatchingCards(t *testing.T) {
 	archiveDir := t.TempDir()
 	root := filepath.Join(archiveDir, "guild_id=guild1")
 	writeViewerMetadata(t, root)
@@ -257,6 +257,8 @@ func TestMediaPageRendersEachAttachmentAndEmbedAsACard(t *testing.T) {
 	message := testMessage("mixed", "2026-07-11T09:00:00Z", "hidden body marker", nil)
 	message.Attachments = []*discordgo.MessageAttachment{
 		{ID: "image", Filename: "photo.png", ContentType: "image/png", Size: 12},
+		{ID: "video", Filename: "clip.mp4", ContentType: "video/mp4", Size: 18},
+		{ID: "audio", Filename: "voice.ogg", ContentType: "audio/ogg", Size: 20},
 		{ID: "file", Filename: "notes.txt", ContentType: "text/plain", Size: 24},
 	}
 	message.Embeds = []*discordgo.MessageEmbed{{Title: "preview"}, {}}
@@ -266,29 +268,43 @@ func TestMediaPageRendersEachAttachmentAndEmbedAsACard(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	recorder := httptest.NewRecorder()
-	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/g/guild1/c/channel1/media", nil))
-
-	if recorder.Code != http.StatusOK {
-		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusOK)
+	tests := []struct {
+		path      string
+		want      []string
+		cardCount int
+	}{
+		{"images", []string{"photo.png"}, 1},
+		{"videos", []string{"clip.mp4"}, 1},
+		{"audio", []string{"voice.ogg"}, 1},
+		{"files", []string{"notes.txt"}, 1},
+		{"embeds", []string{"preview", "埋め込み"}, 2},
 	}
-	body := recorder.Body.String()
-	if got, want := strings.Count(body, `class="media-card"`), 4; got != want {
-		t.Fatalf("media card count = %d, want %d", got, want)
-	}
-	for _, want := range []string{"photo.png", "notes.txt", "preview", "埋め込み", "alice", "メッセージ", "メディア", "IntersectionObserver"} {
-		if !strings.Contains(body, want) {
-			t.Errorf("response does not contain %q", want)
-		}
-	}
-	for _, unwanted := range []string{"text only marker", "hidden body marker"} {
-		if strings.Contains(body, unwanted) {
-			t.Errorf("response unexpectedly contains %q", unwanted)
-		}
+	for _, tt := range tests {
+		t.Run(tt.path, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/g/guild1/c/channel1/"+tt.path, nil))
+			if recorder.Code != http.StatusOK {
+				t.Fatalf("status = %d, want %d", recorder.Code, http.StatusOK)
+			}
+			body := recorder.Body.String()
+			if got := strings.Count(body, `class="media-card"`); got != tt.cardCount {
+				t.Fatalf("media card count = %d, want %d", got, tt.cardCount)
+			}
+			for _, want := range append(tt.want, "alice", "メッセージ", "画像", "動画", "音声", "ファイル", "埋め込み", "IntersectionObserver") {
+				if !strings.Contains(body, want) {
+					t.Errorf("response does not contain %q", want)
+				}
+			}
+			for _, unwanted := range []string{"text only marker", "hidden body marker"} {
+				if strings.Contains(body, unwanted) {
+					t.Errorf("response unexpectedly contains %q", unwanted)
+				}
+			}
+		})
 	}
 }
 
-func TestMediaPageWithoutMediaShowsEmptyState(t *testing.T) {
+func TestMediaKindPageWithoutMatchingItemsShowsEmptyState(t *testing.T) {
 	archiveDir := t.TempDir()
 	root := filepath.Join(archiveDir, "guild_id=guild1")
 	writeViewerMetadata(t, root)
@@ -299,24 +315,60 @@ func TestMediaPageWithoutMediaShowsEmptyState(t *testing.T) {
 		t.Fatal(err)
 	}
 	recorder := httptest.NewRecorder()
-	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/g/guild1/c/channel1/media", nil))
+	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/g/guild1/c/channel1/images", nil))
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusOK)
 	}
-	if !strings.Contains(recorder.Body.String(), "アーカイブされたメディアがありません。") {
+	if !strings.Contains(recorder.Body.String(), "アーカイブされた画像がありません。") {
 		t.Fatal("response does not contain media empty state")
 	}
 }
 
-func TestMediaItemsRejectsInvalidCursor(t *testing.T) {
+func TestMediaKindItemsRejectInvalidCursor(t *testing.T) {
 	handler, err := NewHandler(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
 	recorder := httptest.NewRecorder()
-	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/g/guild1/c/channel1/media/items?before=invalid", nil))
+	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/g/guild1/c/channel1/images/items?before=invalid", nil))
 	if recorder.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusBadRequest)
+	}
+}
+
+func TestLegacyMediaRoutesAreNotAvailable(t *testing.T) {
+	handler, err := NewHandler(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{"/g/guild1/c/channel1/media", "/g/guild1/c/channel1/media/items"} {
+		recorder := httptest.NewRecorder()
+		handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, path, nil))
+		if recorder.Code != http.StatusNotFound {
+			t.Errorf("%s status = %d, want %d", path, recorder.Code, http.StatusNotFound)
+		}
+	}
+}
+
+func TestAttachmentMediaKindUsesMIMEThenExtensionFallback(t *testing.T) {
+	tests := []struct {
+		name       string
+		attachment *discordgo.MessageAttachment
+		want       mediaKind
+	}{
+		{"image MIME", &discordgo.MessageAttachment{Filename: "asset.bin", ContentType: "image/png"}, mediaImage},
+		{"video MIME parameters", &discordgo.MessageAttachment{Filename: "asset.bin", ContentType: "video/mp4; charset=binary"}, mediaVideo},
+		{"audio extension", &discordgo.MessageAttachment{Filename: "voice.ogg"}, mediaAudio},
+		{"generic MIME extension", &discordgo.MessageAttachment{Filename: "photo.png", ContentType: "application/octet-stream"}, mediaImage},
+		{"MIME wins", &discordgo.MessageAttachment{Filename: "photo.png", ContentType: "text/plain"}, mediaFile},
+		{"unknown", &discordgo.MessageAttachment{Filename: "archive.unknown"}, mediaFile},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := attachmentMediaKind(tt.attachment); got != tt.want {
+				t.Fatalf("attachmentMediaKind() = %q, want %q", got, tt.want)
+			}
+		})
 	}
 }
 

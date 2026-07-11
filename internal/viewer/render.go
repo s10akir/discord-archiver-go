@@ -158,7 +158,7 @@ header {
 }
 header h1 { font-size: 16px; margin: 0; color: #f2f3f5; }
 header .crumbs { font-size: 12px; color: #949ba4; margin-top: 4px; }
-.view-tabs { display: flex; gap: 6px; margin-top: 10px; }
+.view-tabs { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
 .view-tabs a { color: #b5bac1; padding: 5px 9px; border-radius: 4px; font-size: 13px; }
 .view-tabs a:hover { background: #3a3c41; text-decoration: none; }
 .view-tabs a.active { color: #fff; background: #404249; }
@@ -289,7 +289,7 @@ var messagesTemplate = template.Must(template.New("messages").Funcs(funcMap).Par
 <header>
 <h1>{{.Channel.Name}}</h1>
 <div class="crumbs"><a href="/g/{{.GuildID}}">&laquo; channels</a></div>
-<nav class="view-tabs" aria-label="表示切替"><a class="active" href="/g/{{.GuildID}}/c/{{.Channel.ID}}">メッセージ</a><a href="/g/{{.GuildID}}/c/{{.Channel.ID}}/media">メディア</a></nav>
+<nav class="view-tabs" aria-label="表示切替"><a class="active" href="/g/{{.GuildID}}/c/{{.Channel.ID}}">メッセージ</a><a href="/g/{{.GuildID}}/c/{{.Channel.ID}}/images">画像</a><a href="/g/{{.GuildID}}/c/{{.Channel.ID}}/videos">動画</a><a href="/g/{{.GuildID}}/c/{{.Channel.ID}}/audio">音声</a><a href="/g/{{.GuildID}}/c/{{.Channel.ID}}/files">ファイル</a><a href="/g/{{.GuildID}}/c/{{.Channel.ID}}/embeds">埋め込み</a></nav>
 </header>
 <main>
 {{if not .Sections}}<p class="empty">アーカイブされたメッセージがありません。</p>{{end}}
@@ -452,15 +452,15 @@ finishInitialLoading();
 `))
 
 var mediaTemplate = template.Must(template.New("media").Funcs(funcMap).Parse(`<!doctype html>
-<html><head><meta charset="utf-8"><title>{{.Channel.Name}} media - Discord Archive</title><style>` + baseCSS + `</style></head>
+<html><head><meta charset="utf-8"><title>{{.Channel.Name}} {{.Kind.Label}} - Discord Archive</title><style>` + baseCSS + `</style></head>
 <body>
 <header>
 <h1>{{.Channel.Name}}</h1>
 <div class="crumbs"><a href="/g/{{.GuildID}}">&laquo; channels</a></div>
-<nav class="view-tabs" aria-label="表示切替"><a href="/g/{{.GuildID}}/c/{{.Channel.ID}}">メッセージ</a><a class="active" href="/g/{{.GuildID}}/c/{{.Channel.ID}}/media">メディア</a></nav>
+<nav class="view-tabs" aria-label="表示切替"><a href="/g/{{.GuildID}}/c/{{.Channel.ID}}">メッセージ</a>{{range .Kinds}}<a{{if eq $.Kind.Kind .Kind}} class="active"{{end}} href="/g/{{$.GuildID}}/c/{{$.Channel.ID}}/{{.Kind}}">{{.Label}}</a>{{end}}</nav>
 </header>
 <main>
-{{if not .Items}}<p id="media-empty" class="empty">アーカイブされたメディアがありません。</p>{{end}}
+{{if not .Items}}<p id="media-empty" class="empty">アーカイブされた{{.Kind.Label}}がありません。</p>{{end}}
 <div id="media-grid" class="media-grid">{{template "media-items" .Items}}</div>
 <div id="media-sentinel" data-cursor="{{.Cursor}}" data-has-more="{{.HasMore}}"></div>
 <div id="media-status" class="load-status"></div>
@@ -474,7 +474,7 @@ let loading = false;
 async function loadOlderMedia() {
   if (loading || sentinel.dataset.hasMore !== "true") return;
   loading = true;
-  status.textContent = "過去のメディアを読み込み中…";
+  status.textContent = "過去の{{.Kind.Label}}を読み込み中…";
   try {
     const response = await fetch(window.location.pathname + "/items?before=" + encodeURIComponent(sentinel.dataset.cursor));
     if (!response.ok) throw new Error("request failed: " + response.status);
@@ -482,7 +482,7 @@ async function loadOlderMedia() {
     grid.insertAdjacentHTML("beforeend", page.html);
     sentinel.dataset.cursor = page.next_cursor;
     sentinel.dataset.hasMore = String(page.has_more);
-    status.textContent = page.has_more ? "" : "これより古いメディアはありません。";
+    status.textContent = page.has_more ? "" : "これより古い{{.Kind.Label}}はありません。";
     if (!page.has_more) observer.disconnect();
   } catch (error) {
     status.replaceChildren();

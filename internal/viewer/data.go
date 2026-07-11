@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"mime"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -58,8 +59,18 @@ type messagePage struct {
 
 type messageStore interface {
 	Page(channelID string, before *messageCursor, limit int) (messagePage, error)
-	MediaPage(channelID string, before *messageCursor, limit int) (messagePage, error)
+	MediaPage(channelID string, kind mediaKind, before *messageCursor, limit int) (messagePage, error)
 }
+
+type mediaKind string
+
+const (
+	mediaImage mediaKind = "images"
+	mediaVideo mediaKind = "videos"
+	mediaAudio mediaKind = "audio"
+	mediaFile  mediaKind = "files"
+	mediaEmbed mediaKind = "embeds"
+)
 
 type jsonlMessageStore struct {
 	root string
@@ -77,10 +88,43 @@ func (s jsonlMessageStore) Page(channelID string, before *messageCursor, limit i
 	return page, nil
 }
 
-func (s jsonlMessageStore) MediaPage(channelID string, before *messageCursor, limit int) (messagePage, error) {
+func (s jsonlMessageStore) MediaPage(channelID string, kind mediaKind, before *messageCursor, limit int) (messagePage, error) {
 	return s.page(channelID, before, limit, func(message *discordgo.Message) bool {
-		return len(message.Attachments) > 0 || len(message.Embeds) > 0
+		if kind == mediaEmbed {
+			return len(message.Embeds) > 0
+		}
+		for _, attachment := range message.Attachments {
+			if attachmentMediaKind(attachment) == kind {
+				return true
+			}
+		}
+		return false
 	})
+}
+
+func attachmentMediaKind(attachment *discordgo.MessageAttachment) mediaKind {
+	contentType := attachment.ContentType
+	parsedOK := false
+	if parsed, _, err := mime.ParseMediaType(contentType); err == nil {
+		contentType = parsed
+		parsedOK = contentType != ""
+	}
+	if !parsedOK || strings.EqualFold(contentType, "application/octet-stream") {
+		contentType = mime.TypeByExtension(filepath.Ext(attachment.Filename))
+		if parsed, _, err := mime.ParseMediaType(contentType); err == nil {
+			contentType = parsed
+		}
+	}
+	switch {
+	case strings.HasPrefix(strings.ToLower(contentType), "image/"):
+		return mediaImage
+	case strings.HasPrefix(strings.ToLower(contentType), "video/"):
+		return mediaVideo
+	case strings.HasPrefix(strings.ToLower(contentType), "audio/"):
+		return mediaAudio
+	default:
+		return mediaFile
+	}
 }
 
 func (s jsonlMessageStore) page(channelID string, before *messageCursor, limit int, include func(*discordgo.Message) bool) (messagePage, error) {
