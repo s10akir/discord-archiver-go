@@ -4,6 +4,7 @@ package viewer
 
 import (
 	"bufio"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/url"
@@ -12,6 +13,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/bwmarrin/discordgo"
 	"github.com/s10akir/discord-archiver-go/internal/archive"
@@ -35,6 +37,122 @@ type messageLine struct {
 	ChannelName string             `json:"channel_name"`
 	ParentID    string             `json:"parent_id"`
 	Message     *discordgo.Message `json:"message"`
+}
+
+type archivedMessage struct {
+	Date    string
+	Message *discordgo.Message
+}
+
+type messageCursor struct {
+	Date      string `json:"date"`
+	Timestamp string `json:"timestamp"`
+	ID        string `json:"id"`
+}
+
+type messagePage struct {
+	Messages   []archivedMessage
+	NextCursor *messageCursor
+	HasMore    bool
+}
+
+type messageStore interface {
+	Page(channelID string, before *messageCursor, limit int) (messagePage, error)
+}
+
+type jsonlMessageStore struct {
+	root string
+}
+
+func (s jsonlMessageStore) Page(channelID string, before *messageCursor, limit int) (messagePage, error) {
+	if limit <= 0 {
+		return messagePage{}, nil
+	}
+	dates, err := listDates(s.root, channelID)
+	if err != nil {
+		return messagePage{}, err
+	}
+
+	var cursorTime time.Time
+	if before != nil {
+		cursorTime, err = time.Parse(time.RFC3339Nano, before.Timestamp)
+		if err != nil {
+			return messagePage{}, fmt.Errorf("parse cursor timestamp: %w", err)
+		}
+	}
+
+	// Collect newest-to-oldest. One extra record tells the caller whether
+	// another page exists without reading every older date partition.
+	collected := make([]archivedMessage, 0, limit+1)
+	for i := len(dates) - 1; i >= 0 && len(collected) <= limit; i-- {
+		date := dates[i]
+		if before != nil && date > before.Date {
+			continue
+		}
+		messages, err := loadMessages(s.root, date, channelID)
+		if err != nil {
+			return messagePage{}, err
+		}
+		for j := len(messages) - 1; j >= 0 && len(collected) <= limit; j-- {
+			message := messages[j]
+			if before != nil && date == before.Date && !messageBefore(message, cursorTime, before.ID) {
+				continue
+			}
+			collected = append(collected, archivedMessage{Date: date, Message: message})
+		}
+	}
+
+	hasMore := len(collected) > limit
+	if hasMore {
+		collected = collected[:limit]
+	}
+	for i, j := 0, len(collected)-1; i < j; i, j = i+1, j-1 {
+		collected[i], collected[j] = collected[j], collected[i]
+	}
+
+	page := messagePage{Messages: collected, HasMore: hasMore}
+	if hasMore && len(collected) > 0 {
+		oldest := collected[0]
+		page.NextCursor = &messageCursor{
+			Date:      oldest.Date,
+			Timestamp: oldest.Message.Timestamp.Format(time.RFC3339Nano),
+			ID:        oldest.Message.ID,
+		}
+	}
+	return page, nil
+}
+
+func messageBefore(message *discordgo.Message, timestamp time.Time, id string) bool {
+	if message.Timestamp.Before(timestamp) {
+		return true
+	}
+	return message.Timestamp.Equal(timestamp) && message.ID < id
+}
+
+func encodeCursor(cursor *messageCursor) string {
+	if cursor == nil {
+		return ""
+	}
+	data, _ := json.Marshal(cursor)
+	return base64.RawURLEncoding.EncodeToString(data)
+}
+
+func decodeCursor(value string) (*messageCursor, error) {
+	data, err := base64.RawURLEncoding.DecodeString(value)
+	if err != nil {
+		return nil, fmt.Errorf("decode cursor: %w", err)
+	}
+	var cursor messageCursor
+	if err := json.Unmarshal(data, &cursor); err != nil {
+		return nil, fmt.Errorf("unmarshal cursor: %w", err)
+	}
+	if !dateDirPattern.MatchString("date="+cursor.Date) || cursor.ID == "" {
+		return nil, fmt.Errorf("invalid cursor")
+	}
+	if _, err := time.Parse(time.RFC3339Nano, cursor.Timestamp); err != nil {
+		return nil, fmt.Errorf("invalid cursor timestamp: %w", err)
+	}
+	return &cursor, nil
 }
 
 // container is a message-bearing entity: either a regular channel or a
@@ -195,6 +313,9 @@ func loadMessages(root, date, channelID string) ([]*discordgo.Message, error) {
 	}
 
 	sort.Slice(messages, func(i, j int) bool {
+		if messages[i].Timestamp.Equal(messages[j].Timestamp) {
+			return messages[i].ID < messages[j].ID
+		}
 		return messages[i].Timestamp.Before(messages[j].Timestamp)
 	})
 	return messages, nil

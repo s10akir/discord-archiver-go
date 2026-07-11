@@ -1,7 +1,9 @@
 package viewer
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"html/template"
@@ -17,8 +19,11 @@ import (
 )
 
 type server struct {
-	archiveDir string
+	archiveDir      string
+	newMessageStore func(root string) messageStore
 }
+
+const messagePageSize = 100
 
 // NewHandler builds the viewer's HTTP handler rooted at archiveDir, the same
 // -out-dir passed to `dump`/the daemon.
@@ -31,13 +36,18 @@ func NewHandler(archiveDir string) (http.Handler, error) {
 		return nil, fmt.Errorf("%s is not a directory", archiveDir)
 	}
 
-	s := &server{archiveDir: archiveDir}
+	s := &server{
+		archiveDir: archiveDir,
+		newMessageStore: func(root string) messageStore {
+			return jsonlMessageStore{root: root}
+		},
+	}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /{$}", s.handleGuilds)
 	mux.HandleFunc("GET /g/{guild}", s.handleChannels)
-	mux.HandleFunc("GET /g/{guild}/c/{channel}", s.handleDates)
-	mux.HandleFunc("GET /g/{guild}/c/{channel}/d/{date}", s.handleMessages)
+	mux.HandleFunc("GET /g/{guild}/c/{channel}", s.handleMessages)
+	mux.HandleFunc("GET /g/{guild}/c/{channel}/messages", s.handleMessagePage)
 	mux.HandleFunc("GET /files/{guild}/{rest...}", s.handleFile)
 	return mux, nil
 }
@@ -123,40 +133,14 @@ func (s *server) handleChannels(w http.ResponseWriter, r *http.Request) {
 	}{guildID, groups})
 }
 
-func (s *server) handleDates(w http.ResponseWriter, r *http.Request) {
-	guildID := r.PathValue("guild")
-	channelID := r.PathValue("channel")
-	root := guildRoot(s.archiveDir, guildID)
-
-	containers, _, err := loadContainers(root)
-	if err != nil {
-		httpError(w, err)
-		return
-	}
-	channel, ok := findContainer(containers, channelID)
-	if !ok {
-		channel = container{ID: channelID, Name: channelID}
-	}
-
-	dates, err := listDates(root, channelID)
-	if err != nil {
-		httpError(w, err)
-		return
-	}
-	// newest first for browsing
-	sort.Sort(sort.Reverse(sort.StringSlice(dates)))
-
-	render(w, datesTemplate, struct {
-		GuildID string
-		Channel container
-		Dates   []string
-	}{guildID, channel, dates})
+type messageSection struct {
+	Date     string
+	Messages []messageView
 }
 
 func (s *server) handleMessages(w http.ResponseWriter, r *http.Request) {
 	guildID := r.PathValue("guild")
 	channelID := r.PathValue("channel")
-	date := r.PathValue("date")
 	root := guildRoot(s.archiveDir, guildID)
 
 	containers, names, err := loadContainers(root)
@@ -169,47 +153,80 @@ func (s *server) handleMessages(w http.ResponseWriter, r *http.Request) {
 		channel = container{ID: channelID, Name: channelID}
 	}
 
-	dates, err := listDates(root, channelID)
+	page, err := s.newMessageStore(root).Page(channelID, nil, messagePageSize)
 	if err != nil {
 		httpError(w, err)
 		return
 	}
-	prevDate, nextDate := neighborDates(dates, date)
-
-	messages, err := loadMessages(root, date, channelID)
-	if err != nil {
-		httpError(w, err)
-		return
-	}
-
-	views := make([]messageView, 0, len(messages))
-	for _, m := range messages {
-		views = append(views, buildMessageView(root, guildID, date, channelID, m, names))
-	}
+	sections := buildMessageSections(root, guildID, channelID, page.Messages, names)
 
 	render(w, messagesTemplate, struct {
 		GuildID  string
 		Channel  container
-		Date     string
-		PrevDate string
-		NextDate string
-		Messages []messageView
-	}{guildID, channel, date, prevDate, nextDate, views})
+		Sections []messageSection
+		Cursor   string
+		HasMore  bool
+	}{guildID, channel, sections, encodeCursor(page.NextCursor), page.HasMore})
 }
 
-func neighborDates(dates []string, current string) (prev, next string) {
-	for i, d := range dates {
-		if d == current {
-			if i > 0 {
-				prev = dates[i-1]
-			}
-			if i+1 < len(dates) {
-				next = dates[i+1]
-			}
-			return prev, next
-		}
+func (s *server) handleMessagePage(w http.ResponseWriter, r *http.Request) {
+	guildID := r.PathValue("guild")
+	channelID := r.PathValue("channel")
+	root := guildRoot(s.archiveDir, guildID)
+
+	cursor, err := decodeCursor(r.URL.Query().Get("before"))
+	if err != nil {
+		writeJSONError(w, "invalid cursor", http.StatusBadRequest)
+		return
 	}
-	return "", ""
+	_, names, err := loadContainers(root)
+	if err != nil {
+		log.Printf("viewer error: %v", err)
+		writeJSONError(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	page, err := s.newMessageStore(root).Page(channelID, cursor, messagePageSize)
+	if err != nil {
+		log.Printf("viewer error: %v", err)
+		writeJSONError(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	sections := buildMessageSections(root, guildID, channelID, page.Messages, names)
+	var fragment bytes.Buffer
+	if err := messagesTemplate.ExecuteTemplate(&fragment, "sections", sections); err != nil {
+		log.Printf("viewer error: %v", err)
+		writeJSONError(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	if err := json.NewEncoder(w).Encode(struct {
+		HTML       string `json:"html"`
+		NextCursor string `json:"next_cursor"`
+		HasMore    bool   `json:"has_more"`
+	}{fragment.String(), encodeCursor(page.NextCursor), page.HasMore}); err != nil {
+		log.Printf("encode message page: %v", err)
+	}
+}
+
+func writeJSONError(w http.ResponseWriter, message string, status int) {
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(struct {
+		Error string `json:"error"`
+	}{message})
+}
+
+func buildMessageSections(root, guildID, channelID string, messages []archivedMessage, names map[string]string) []messageSection {
+	var sections []messageSection
+	for _, archived := range messages {
+		if len(sections) == 0 || sections[len(sections)-1].Date != archived.Date {
+			sections = append(sections, messageSection{Date: archived.Date})
+		}
+		section := &sections[len(sections)-1]
+		section.Messages = append(section.Messages, buildMessageView(root, guildID, archived.Date, channelID, archived.Message, names))
+	}
+	return sections
 }
 
 func (s *server) handleFile(w http.ResponseWriter, r *http.Request) {
@@ -249,6 +266,8 @@ type attachmentView struct {
 	URL       string
 	Filename  string
 	Size      int
+	Width     int
+	Height    int
 	IsImage   bool
 	IsVideo   bool
 	IsAudio   bool
@@ -260,6 +279,8 @@ type embedView struct {
 	URL         string
 	Description string
 	ImageURL    string
+	ImageWidth  int
+	ImageHeight int
 	Color       string
 }
 
@@ -297,7 +318,7 @@ func buildMessageView(root, guildID, date, channelID string, m *discordgo.Messag
 	}
 
 	for _, a := range m.Attachments {
-		av := attachmentView{Filename: a.Filename, Size: a.Size}
+		av := attachmentView{Filename: a.Filename, Size: a.Size, Width: a.Width, Height: a.Height}
 		if hasLocalAttachment(root, date, channelID, m.ID, a) {
 			ct := strings.ToLower(a.ContentType)
 			av.Available = true
@@ -318,8 +339,12 @@ func buildMessageView(root, guildID, date, channelID string, m *discordgo.Messag
 		}
 		if e.Image != nil {
 			ev.ImageURL = e.Image.URL
+			ev.ImageWidth = e.Image.Width
+			ev.ImageHeight = e.Image.Height
 		} else if e.Thumbnail != nil {
 			ev.ImageURL = e.Thumbnail.URL
+			ev.ImageWidth = e.Thumbnail.Width
+			ev.ImageHeight = e.Thumbnail.Height
 		}
 		v.Embeds = append(v.Embeds, ev)
 	}

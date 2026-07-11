@@ -125,6 +125,19 @@ body {
   background: #313338; color: #dbdee1;
   font-family: "Helvetica Neue", Arial, "Hiragino Kaku Gothic ProN", "Yu Gothic", sans-serif;
 }
+body.initial-loading { overflow: hidden; }
+.initial-loader {
+  display: none; position: fixed; inset: 0; z-index: 100;
+  background: rgba(30,31,34,.94); align-items: center; justify-content: center;
+  flex-direction: column; gap: 12px; color: #dbdee1; font-size: 13px;
+}
+body.initial-loading .initial-loader { display: flex; }
+.loading-spinner {
+  width: 34px; height: 34px; border: 4px solid #4a4d53; border-top-color: #5865f2;
+  border-radius: 50%; animation: spin .8s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .loading-spinner { animation-duration: 1.8s; } }
 a { color: #00a8fc; text-decoration: none; }
 a:hover { text-decoration: underline; }
 header {
@@ -146,13 +159,13 @@ main { max-width: 900px; margin: 0 auto; padding: 16px 20px 60px; }
   display: inline-block; font-size: 10px; color: #949ba4; border: 1px solid #4a4d53;
   border-radius: 4px; padding: 0 5px; margin-left: 6px; vertical-align: middle;
 }
-.date-grid { display: flex; flex-wrap: wrap; gap: 6px; }
-.date-grid a {
-  padding: 6px 10px; background: #2b2d31; border-radius: 6px; font-size: 13px; color: #dbdee1;
+.date-heading {
+  display: flex; align-items: center; gap: 12px; margin: 22px 0 10px;
+  color: #949ba4; font-size: 12px; font-weight: 600; scroll-margin-top: 70px;
 }
-.date-grid a:hover { background: #3a3c41; text-decoration: none; }
-.date-nav { display: flex; justify-content: space-between; margin-bottom: 14px; font-size: 13px; }
-.date-nav span.disabled { color: #4a4d53; }
+.date-heading::before, .date-heading::after { content: ""; height: 1px; background: #4a4d53; flex: 1; }
+.load-status { min-height: 28px; text-align: center; color: #949ba4; font-size: 12px; }
+.load-status button { color: #fff; background: #5865f2; border: 0; border-radius: 4px; padding: 5px 10px; cursor: pointer; }
 .messages { display: flex; flex-direction: column; gap: 2px; }
 .msg { display: flex; gap: 14px; padding: 6px 10px; border-radius: 6px; }
 .msg:hover { background: #2e3035; }
@@ -170,14 +183,14 @@ main { max-width: 900px; margin: 0 auto; padding: 16px 20px 60px; }
 .content { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.4; }
 .mention { background: rgba(88,101,242,.3); color: #c9cdfb; border-radius: 3px; padding: 0 2px; }
 .attachments { margin-top: 6px; display: flex; flex-direction: column; gap: 6px; }
-.attachments img, .attachments video { max-width: 400px; max-height: 300px; border-radius: 6px; display: block; }
+.attachments img, .attachments video { width: auto; height: auto; max-width: min(400px, 100%); max-height: 300px; border-radius: 6px; display: block; }
 .attachments audio { max-width: 400px; }
 .att-file { font-size: 13px; background: #2b2d31; padding: 8px 10px; border-radius: 6px; display: inline-block; }
 .att-missing { font-size: 13px; color: #949ba4; background: #2b2d31; padding: 8px 10px; border-radius: 6px; display: inline-block; font-style: italic; }
 .embed { border-left: 4px solid #4a4d53; background: #2b2d31; border-radius: 4px; padding: 10px 12px; margin-top: 6px; max-width: 480px; }
 .embed .embed-title { font-weight: 600; margin-bottom: 4px; }
 .embed .embed-desc { font-size: 13px; color: #c7c9cd; white-space: pre-wrap; }
-.embed img { max-width: 100%; max-height: 260px; border-radius: 4px; margin-top: 6px; display: block; }
+.embed img { width: auto; height: auto; max-width: 100%; max-height: 260px; border-radius: 4px; margin-top: 6px; display: block; }
 .reactions { margin-top: 6px; display: flex; gap: 6px; flex-wrap: wrap; }
 .reaction { background: #2b2d31; border-radius: 8px; padding: 2px 7px; font-size: 12px; }
 .reply { font-size: 12px; color: #949ba4; margin-bottom: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 480px; }
@@ -222,32 +235,140 @@ var channelsTemplate = template.Must(template.New("channels").Funcs(funcMap).Par
 </body></html>
 `))
 
-var datesTemplate = template.Must(template.New("dates").Funcs(funcMap).Parse(`<!doctype html>
+var messagesTemplate = template.Must(template.New("messages").Funcs(funcMap).Parse(`<!doctype html>
 <html><head><meta charset="utf-8"><title>{{.Channel.Name}} - Discord Archive</title><style>` + baseCSS + `</style></head>
 <body>
-<header><h1>{{.Channel.Name}}</h1><div class="crumbs"><a href="/g/{{.GuildID}}">&laquo; channels</a></div></header>
-<main>
-{{if not .Dates}}<p class="empty">アーカイブされたメッセージがありません。</p>{{end}}
-<div class="date-grid">
-{{range .Dates}}<a href="/g/{{$.GuildID}}/c/{{$.Channel.ID}}/d/{{.}}">{{.}}</a>{{end}}
+<div id="initial-loader" class="initial-loader" role="status" aria-live="polite" aria-hidden="true">
+  <div class="loading-spinner" aria-hidden="true"></div>
+  <div>メディアを読み込んでいます…</div>
 </div>
-</main>
-</body></html>
-`))
-
-var messagesTemplate = template.Must(template.New("messages").Funcs(funcMap).Parse(`<!doctype html>
-<html><head><meta charset="utf-8"><title>{{.Channel.Name}} {{.Date}} - Discord Archive</title><style>` + baseCSS + `</style></head>
-<body>
+<script>document.body.classList.add("initial-loading");document.body.setAttribute("aria-busy", "true");document.getElementById("initial-loader").setAttribute("aria-hidden", "false");</script>
 <header>
-<h1>{{.Channel.Name}} <small style="color:#949ba4;font-weight:400;">{{.Date}}</small></h1>
-<div class="crumbs"><a href="/g/{{.GuildID}}">&laquo; channels</a> / <a href="/g/{{.GuildID}}/c/{{.Channel.ID}}">dates</a></div>
+<h1>{{.Channel.Name}}</h1>
+<div class="crumbs"><a href="/g/{{.GuildID}}">&laquo; channels</a></div>
 </header>
 <main>
-<div class="date-nav">
-{{if .PrevDate}}<a href="/g/{{.GuildID}}/c/{{.Channel.ID}}/d/{{.PrevDate}}">&laquo; {{.PrevDate}}</a>{{else}}<span class="disabled">&laquo;</span>{{end}}
-{{if .NextDate}}<a href="/g/{{.GuildID}}/c/{{.Channel.ID}}/d/{{.NextDate}}">{{.NextDate}} &raquo;</a>{{else}}<span class="disabled">&raquo;</span>{{end}}
-</div>
-{{if not .Messages}}<p class="empty">この日のメッセージはありません。</p>{{end}}
+{{if not .Sections}}<p class="empty">アーカイブされたメッセージがありません。</p>{{end}}
+<div id="load-status" class="load-status"></div>
+<div id="older-sentinel" data-cursor="{{.Cursor}}" data-has-more="{{.HasMore}}"></div>
+<div id="message-sections">{{template "sections" .Sections}}</div>
+<div id="latest"></div>
+</main>
+<script>
+const sentinel = document.getElementById("older-sentinel");
+const sectionsRoot = document.getElementById("message-sections");
+const loadStatus = document.getElementById("load-status");
+const pageHeader = document.querySelector("header");
+const pageMain = document.querySelector("main");
+pageHeader.inert = true;
+pageMain.inert = true;
+let loading = false;
+
+function sectionForDate(date) {
+  return Array.from(sectionsRoot.children).find(section => section.dataset.date === date);
+}
+
+async function loadOlder() {
+  if (loading || sentinel.dataset.hasMore !== "true") return;
+  loading = true;
+  loadStatus.textContent = "過去のメッセージを読み込み中…";
+  try {
+    const response = await fetch(window.location.pathname + "/messages?before=" + encodeURIComponent(sentinel.dataset.cursor));
+    if (!response.ok) throw new Error("request failed: " + response.status);
+    const page = await response.json();
+    const oldHeight = document.documentElement.scrollHeight;
+    const holder = document.createElement("div");
+    holder.innerHTML = page.html;
+    const newSections = document.createDocumentFragment();
+    for (const incoming of Array.from(holder.children)) {
+      const existing = sectionForDate(incoming.dataset.date);
+      if (existing) {
+        const messages = document.createDocumentFragment();
+        for (const message of Array.from(incoming.querySelector(".messages").children)) messages.appendChild(message);
+        existing.querySelector(".messages").prepend(messages);
+      } else {
+        newSections.appendChild(incoming);
+      }
+    }
+    sectionsRoot.prepend(newSections);
+    sentinel.dataset.cursor = page.next_cursor;
+    sentinel.dataset.hasMore = String(page.has_more);
+    window.scrollBy(0, document.documentElement.scrollHeight - oldHeight);
+    loadStatus.textContent = page.has_more ? "" : "これより古いメッセージはありません。";
+    if (!page.has_more) observer.disconnect();
+  } catch (error) {
+    loadStatus.replaceChildren();
+    const retry = document.createElement("button");
+    retry.type = "button";
+    retry.textContent = "読み込みに失敗しました。再試行";
+    retry.addEventListener("click", loadOlder);
+    loadStatus.appendChild(retry);
+  } finally {
+    loading = false;
+  }
+}
+
+const observer = new IntersectionObserver(entries => {
+  if (entries.some(entry => entry.isIntersecting)) loadOlder();
+}, { rootMargin: "300px 0px 0px" });
+if (sentinel.dataset.hasMore === "true") observer.observe(sentinel);
+
+function waitForInitialImage(image) {
+  image.loading = "eager";
+  if (image.complete) return Promise.resolve();
+  return new Promise(resolve => {
+    image.addEventListener("load", resolve, { once: true });
+    image.addEventListener("error", resolve, { once: true });
+  });
+}
+
+function waitForInitialVideo(video) {
+  if (video.readyState >= 1) return Promise.resolve();
+  return new Promise(resolve => {
+    video.addEventListener("loadedmetadata", resolve, { once: true });
+    video.addEventListener("error", resolve, { once: true });
+  });
+}
+
+function nextFrame() {
+  return new Promise(resolve => requestAnimationFrame(resolve));
+}
+
+async function finishInitialLoading() {
+  const media = [
+    ...Array.from(sectionsRoot.querySelectorAll("img"), waitForInitialImage),
+    ...Array.from(sectionsRoot.querySelectorAll("video"), waitForInitialVideo),
+  ];
+  if (document.fonts) media.push(document.fonts.ready.catch(() => {}));
+
+  let timeoutID;
+  await Promise.race([
+    Promise.all(media),
+    new Promise(resolve => { timeoutID = setTimeout(resolve, 10000); }),
+  ]);
+  clearTimeout(timeoutID);
+  await nextFrame();
+  await nextFrame();
+  if (window.location.hash) {
+    const target = document.getElementById(window.location.hash.slice(1));
+    if (target) target.scrollIntoView();
+  } else {
+    window.scrollTo({ top: document.documentElement.scrollHeight, behavior: "auto" });
+  }
+  await nextFrame();
+  document.body.classList.remove("initial-loading");
+  document.body.setAttribute("aria-busy", "false");
+  pageHeader.inert = false;
+  pageMain.inert = false;
+  document.getElementById("initial-loader").setAttribute("aria-hidden", "true");
+}
+
+finishInitialLoading();
+</script>
+</body></html>
+{{define "sections"}}{{range .}}
+<section class="date-section" data-date="{{.Date}}">
+<div class="date-heading" id="date-{{.Date}}">{{.Date}}</div>
 <div class="messages">
 {{range .Messages}}
 <div class="msg">
@@ -266,8 +387,8 @@ var messagesTemplate = template.Must(template.New("messages").Funcs(funcMap).Par
     {{if .Attachments}}<div class="attachments">
       {{range .Attachments}}
         {{if not .Available}}<div class="att-missing">&#9888; asset archive not found: {{.Filename}}</div>
-        {{else if .IsImage}}<a href="{{.URL}}" target="_blank"><img src="{{.URL}}" alt="{{.Filename}}"></a>
-        {{else if .IsVideo}}<video src="{{.URL}}" controls></video>
+        {{else if .IsImage}}<a href="{{.URL}}" target="_blank"><img src="{{.URL}}" alt="{{.Filename}}"{{if and .Width .Height}} width="{{.Width}}" height="{{.Height}}"{{end}}></a>
+        {{else if .IsVideo}}<video src="{{.URL}}" controls preload="metadata"{{if and .Width .Height}} width="{{.Width}}" height="{{.Height}}"{{end}}></video>
         {{else if .IsAudio}}<audio src="{{.URL}}" controls></audio>
         {{else}}<a class="att-file" href="{{.URL}}" target="_blank">&#128206; {{.Filename}} ({{formatBytes .Size}})</a>{{end}}
       {{end}}
@@ -275,13 +396,13 @@ var messagesTemplate = template.Must(template.New("messages").Funcs(funcMap).Par
     {{if .Embeds}}{{range .Embeds}}<div class="embed" style="border-left-color:{{.Color}}">
       {{if .Title}}<div class="embed-title">{{if .URL}}<a href="{{.URL}}" target="_blank">{{.Title}}</a>{{else}}{{.Title}}{{end}}</div>{{end}}
       {{if .Description}}<div class="embed-desc">{{.Description}}</div>{{end}}
-      {{if .ImageURL}}<img src="{{.ImageURL}}" loading="lazy">{{end}}
+      {{if .ImageURL}}<img src="{{.ImageURL}}" loading="lazy"{{if and .ImageWidth .ImageHeight}} width="{{.ImageWidth}}" height="{{.ImageHeight}}"{{end}}>{{end}}
     </div>{{end}}{{end}}
     {{if .Reactions}}<div class="reactions">{{range .Reactions}}<span class="reaction">{{.Emoji}} {{.Count}}</span>{{end}}</div>{{end}}
   </div>
 </div>
 {{end}}
 </div>
-</main>
-</body></html>
+ </section>
+{{end}}{{end}}
 `))
