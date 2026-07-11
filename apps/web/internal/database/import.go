@@ -72,7 +72,13 @@ func ReplaceDate(ctx context.Context, db *sql.DB, guildID string, date time.Time
 		return err
 	}
 	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `CREATE TEMP TABLE affected_authors(author_id text PRIMARY KEY) ON COMMIT DROP`); err != nil {
+		return err
+	}
 	if _, err := tx.ExecContext(ctx, `INSERT INTO guilds(id) VALUES($1) ON CONFLICT(id) DO UPDATE SET updated_at=now()`, guildID); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO affected_authors(author_id) SELECT DISTINCT author_id FROM messages WHERE guild_id=$1 AND archive_date=$2 AND author_id<>'' ON CONFLICT DO NOTHING`, guildID, date); err != nil {
 		return err
 	}
 	if _, err := tx.ExecContext(ctx, `DELETE FROM messages WHERE guild_id=$1 AND archive_date=$2`, guildID, date); err != nil {
@@ -108,8 +114,7 @@ func ReplaceDate(ctx context.Context, db *sql.DB, guildID string, date time.Time
 			return err
 		}
 		if authorID != "" {
-			_, err = tx.ExecContext(ctx, `INSERT INTO authors(guild_id,author_id,display_name,observed_at) VALUES($1,$2,$3,$4) ON CONFLICT(guild_id,author_id) DO UPDATE SET display_name=excluded.display_name,observed_at=excluded.observed_at WHERE authors.observed_at < excluded.observed_at`, guildID, authorID, authorName, record.Message.Timestamp)
-			if err != nil {
+			if _, err := tx.ExecContext(ctx, `INSERT INTO affected_authors(author_id) VALUES($1) ON CONFLICT DO NOTHING`, authorID); err != nil {
 				return err
 			}
 		}
@@ -123,7 +128,10 @@ func ReplaceDate(ctx context.Context, db *sql.DB, guildID string, date time.Time
 		}
 		return nil
 	}, func() error {
-		if _, err := tx.ExecContext(ctx, `DELETE FROM authors a WHERE a.guild_id=$1 AND NOT EXISTS (SELECT 1 FROM messages m WHERE m.guild_id=a.guild_id AND m.author_id=a.author_id)`, guildID); err != nil {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM authors a USING affected_authors affected WHERE a.guild_id=$1 AND a.author_id=affected.author_id`, guildID); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO authors(guild_id,author_id,display_name,observed_at) SELECT DISTINCT ON (m.author_id) m.guild_id,m.author_id,m.author_name,m.timestamp FROM messages m JOIN affected_authors affected ON affected.author_id=m.author_id WHERE m.guild_id=$1 ORDER BY m.author_id,m.timestamp DESC,m.id DESC`, guildID); err != nil {
 			return err
 		}
 		return tx.Commit()
