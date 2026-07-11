@@ -117,7 +117,7 @@ DATABASE_URL=postgres://discord_archive:discord_archive@localhost:5432/discord_a
 
 ## Importer
 
-Importerは起動時に既存archiveを全件同期し、その後は内容ハッシュが変わったmetadataと日付パーティションを定期的にWebの更新APIへ送ります。PostgreSQLへは接続しません。
+Importerは内容ハッシュが変わったmetadataと日付パーティションを定期的にWebの更新APIへ送ります。同期済みのハッシュは `-state-file` で指定したJSONへ永続化され、再起動後も変更のないデータは再送しません。省略時は archive 直下の `.discord-archive-importer-state.json` を使用します。全件を再同期する場合はImporterを停止し、この状態ファイルを削除してから起動します。PostgreSQLへは接続しません。
 
 ```bash
 DISCORD_ARCHIVE_WEB_URL=http://localhost:8080 \

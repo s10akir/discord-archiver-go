@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -15,6 +16,7 @@ func Parse(args []string, getenv func(string) string) (importer.Config, error) {
 	flags := flag.NewFlagSet("discord-archive-importer", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
 	flags.StringVar(&config.ArchiveDir, "archive-dir", config.ArchiveDir, "Archive directory to scan.")
+	flags.StringVar(&config.StateFile, "state-file", config.StateFile, "Path used to persist synchronized content hashes (defaults inside archive-dir).")
 	flags.StringVar(&config.WebURL, "web-url", config.WebURL, "Web application base URL.")
 	flags.DurationVar(&config.Interval, "interval", config.Interval, "Archive scan interval.")
 	flags.DurationVar(&config.HTTPTimeout, "http-timeout", config.HTTPTimeout, "Import request timeout.")
@@ -29,6 +31,9 @@ func Parse(args []string, getenv func(string) string) (importer.Config, error) {
 	}
 	if config.Interval <= 0 || config.HTTPTimeout <= 0 {
 		return importer.Config{}, fmt.Errorf("durations must be positive")
+	}
+	if config.StateFile == "" {
+		config.StateFile = filepath.Join(config.ArchiveDir, ".discord-archive-importer-state.json")
 	}
 	return config, nil
 }

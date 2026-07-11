@@ -54,9 +54,11 @@ services:
       DISCORD_ARCHIVE_WEB_URL: http://discord-archive-web:8080
     volumes:
       - ./archive:/data/archive:ro
-    command: ["-archive-dir", "/data/archive", "-interval", "30s"]
+      - importer-state:/data/importer
+    command: ["-archive-dir", "/data/archive", "-state-file", "/data/importer/state.json", "-interval", "30s"]
     depends_on:
       - discord-archive-web
 
 volumes:
   postgres-data:
+  importer-state:

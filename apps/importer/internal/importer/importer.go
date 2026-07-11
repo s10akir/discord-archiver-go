@@ -22,18 +22,23 @@ import (
 
 type Config struct {
 	ArchiveDir  string
+	StateFile   string
 	WebURL      string
 	Interval    time.Duration
 	HTTPTimeout time.Duration
 }
 
 type Runner struct {
-	config Config
-	client *http.Client
-	hashes map[string]string
+	config      Config
+	client      *http.Client
+	hashes      map[string]string
+	stateLoaded bool
 }
 
 func New(config Config) *Runner {
+	if config.StateFile == "" {
+		config.StateFile = filepath.Join(config.ArchiveDir, ".discord-archive-importer-state.json")
+	}
 	return &Runner{config: config, client: &http.Client{Timeout: config.HTTPTimeout}, hashes: make(map[string]string)}
 }
 
@@ -68,6 +73,9 @@ var guildPattern = regexp.MustCompile(`^guild_id=(.+)$`)
 var datePattern = regexp.MustCompile(`^date=(\d{4}-\d{2}-\d{2})$`)
 
 func (r *Runner) Sync(ctx context.Context) error {
+	if err := r.loadState(); err != nil {
+		return err
+	}
 	entries, err := os.ReadDir(r.config.ArchiveDir)
 	if err != nil {
 		return fmt.Errorf("read archive: %w", err)
@@ -197,7 +205,79 @@ func (r *Runner) sendChanged(ctx context.Context, key, path string, body []byte)
 		message, _ := io.ReadAll(io.LimitReader(response.Body, 4096))
 		return fmt.Errorf("PUT %s: %s: %s", path, response.Status, strings.TrimSpace(string(message)))
 	}
-	r.hashes[key] = hash
+	next := make(map[string]string, len(r.hashes)+1)
+	for existingKey, existingHash := range r.hashes {
+		next[existingKey] = existingHash
+	}
+	next[key] = hash
+	if err := r.saveState(next); err != nil {
+		return fmt.Errorf("save importer state: %w", err)
+	}
+	r.hashes = next
 	log.Printf("synchronized %s", key)
 	return nil
+}
+
+type persistedState struct {
+	Version int               `json:"version"`
+	Hashes  map[string]string `json:"hashes"`
+}
+
+func (r *Runner) loadState() error {
+	if r.stateLoaded {
+		return nil
+	}
+	data, err := os.ReadFile(r.config.StateFile)
+	if os.IsNotExist(err) {
+		r.stateLoaded = true
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("read importer state: %w", err)
+	}
+	var state persistedState
+	if err := json.Unmarshal(data, &state); err != nil {
+		return fmt.Errorf("decode importer state: %w", err)
+	}
+	if state.Version != 1 || state.Hashes == nil {
+		return fmt.Errorf("decode importer state: unsupported state version %d", state.Version)
+	}
+	r.hashes = state.Hashes
+	r.stateLoaded = true
+	return nil
+}
+
+func (r *Runner) saveState(hashes map[string]string) error {
+	state := persistedState{Version: 1, Hashes: hashes}
+	data, err := json.MarshalIndent(state, "", "  ")
+	if err != nil {
+		return err
+	}
+	data = append(data, '\n')
+	dir := filepath.Dir(r.config.StateFile)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	temporary, err := os.CreateTemp(dir, ".importer-state-*")
+	if err != nil {
+		return err
+	}
+	temporaryName := temporary.Name()
+	defer os.Remove(temporaryName)
+	if err := temporary.Chmod(0o644); err != nil {
+		temporary.Close()
+		return err
+	}
+	if _, err := temporary.Write(data); err != nil {
+		temporary.Close()
+		return err
+	}
+	if err := temporary.Sync(); err != nil {
+		temporary.Close()
+		return err
+	}
+	if err := temporary.Close(); err != nil {
+		return err
+	}
+	return os.Rename(temporaryName, r.config.StateFile)
 }
