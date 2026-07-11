@@ -3,6 +3,7 @@ package web
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -16,10 +17,12 @@ import (
 	"time"
 
 	"github.com/bwmarrin/discordgo"
+	appdb "github.com/s10akir/discord-archiver-go/apps/web/internal/database"
 )
 
 type server struct {
 	archiveDir      string
+	db              *sql.DB
 	newMessageStore func(root string) messageStore
 }
 
@@ -28,6 +31,10 @@ const messagePageSize = 100
 // NewHandler builds the web application's HTTP handler rooted at archiveDir, the same
 // -out-dir passed to `dump`/the daemon.
 func NewHandler(archiveDir string) (http.Handler, error) {
+	return newHandler(archiveDir, nil)
+}
+
+func newHandler(archiveDir string, db *sql.DB) (http.Handler, error) {
 	info, err := os.Stat(archiveDir)
 	if err != nil {
 		return nil, fmt.Errorf("open archive directory: %w", err)
@@ -38,6 +45,7 @@ func NewHandler(archiveDir string) (http.Handler, error) {
 
 	s := &server{
 		archiveDir: archiveDir,
+		db:         db,
 		newMessageStore: func(root string) messageStore {
 			return jsonlMessageStore{root: root}
 		},
@@ -57,12 +65,21 @@ func NewHandler(archiveDir string) (http.Handler, error) {
 		mux.HandleFunc("GET /g/{guild}/c/{channel}/"+string(kind.Kind)+"/items", s.handleMediaPage(kind))
 	}
 	mux.HandleFunc("GET /files/{guild}/{rest...}", s.handleFile)
+	if db != nil {
+		mux.HandleFunc("PUT /api/v1/import/guilds/{guild}/metadata", s.handleImportMetadata)
+		mux.HandleFunc("PUT /api/v1/import/guilds/{guild}/dates/{date}", s.handleImportDate)
+	}
 	return mux, nil
 }
 
 // Run serves the web application on addr until ctx is cancelled.
-func Run(ctx context.Context, archiveDir, addr string) error {
-	handler, err := NewHandler(archiveDir)
+func Run(ctx context.Context, archiveDir, databaseURL, addr string) error {
+	db, err := appdb.Open(ctx, databaseURL)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	handler, err := newHandler(archiveDir, db)
 	if err != nil {
 		return err
 	}
@@ -89,6 +106,29 @@ func Run(ctx context.Context, archiveDir, addr string) error {
 	case err := <-errCh:
 		return err
 	}
+}
+
+func (s *server) handleImportMetadata(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, 512<<20)
+	if err := appdb.ReplaceMetadata(r.Context(), s.db, r.PathValue("guild"), r.Body); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *server) handleImportDate(w http.ResponseWriter, r *http.Request) {
+	date, err := time.Parse(time.DateOnly, r.PathValue("date"))
+	if err != nil {
+		http.Error(w, "invalid date", http.StatusBadRequest)
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 2<<30)
+	if err := appdb.ReplaceDate(r.Context(), s.db, r.PathValue("guild"), date, r.Body); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (s *server) handleGuilds(w http.ResponseWriter, r *http.Request) {

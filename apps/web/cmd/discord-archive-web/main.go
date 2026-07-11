@@ -22,7 +22,7 @@ func main() {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	if err := web.Run(ctx, config.ArchiveDir, config.Addr); err != nil {
+	if err := web.Run(ctx, config.ArchiveDir, config.DatabaseURL, config.Addr); err != nil {
 		log.Fatal(err)
 	}
 }
