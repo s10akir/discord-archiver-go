@@ -95,7 +95,7 @@ func ReplaceDate(ctx context.Context, db *sql.DB, guildID string, date time.Time
 		}
 		authorID, authorName := "", ""
 		if record.Message.Author != nil {
-			authorID, authorName = record.Message.Author.ID, record.Message.Author.Username
+			authorID, authorName = record.Message.Author.ID, record.Message.Author.DisplayName()
 		}
 		var embedParts []string
 		for _, embed := range record.Message.Embeds {
@@ -107,6 +107,12 @@ func ReplaceDate(ctx context.Context, db *sql.DB, guildID string, date time.Time
 		if err != nil {
 			return err
 		}
+		if authorID != "" {
+			_, err = tx.ExecContext(ctx, `INSERT INTO authors(guild_id,author_id,display_name,observed_at) VALUES($1,$2,$3,$4) ON CONFLICT(guild_id,author_id) DO UPDATE SET display_name=excluded.display_name,observed_at=excluded.observed_at WHERE authors.observed_at < excluded.observed_at`, guildID, authorID, authorName, record.Message.Timestamp)
+			if err != nil {
+				return err
+			}
+		}
 		for _, attachment := range record.Message.Attachments {
 			if attachment == nil || attachment.ID == "" {
 				continue
@@ -116,7 +122,12 @@ func ReplaceDate(ctx context.Context, db *sql.DB, guildID string, date time.Time
 			}
 		}
 		return nil
-	}, func() error { return tx.Commit() })
+	}, func() error {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM authors a WHERE a.guild_id=$1 AND NOT EXISTS (SELECT 1 FROM messages m WHERE m.guild_id=a.guild_id AND m.author_id=a.author_id)`, guildID); err != nil {
+			return err
+		}
+		return tx.Commit()
+	})
 }
 
 func scanNDJSON(reader io.Reader, each func([]byte) error, done func() error) error {
