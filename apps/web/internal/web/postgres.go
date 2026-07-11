@@ -69,7 +69,7 @@ type searchOption struct {
 }
 
 func searchOptions(ctx context.Context, db *sql.DB, selectedChannel, selectedAuthor string) ([]searchOption, []searchOption, bool, bool, error) {
-	channelRows, err := db.QueryContext(ctx, `SELECT c.id, CASE WHEN c.is_thread THEN c.name || ' (thread / #' || COALESCE(p.name, '不明') || ')' ELSE '#' || c.name END FROM channels c LEFT JOIN channels p ON p.guild_id=c.guild_id AND p.id=c.parent_id WHERE c.is_thread OR c.type IN (0,2,5,10,11,12) ORDER BY c.is_thread,c.position,lower(c.name),c.id`)
+	channelRows, err := db.QueryContext(ctx, `SELECT c.id, CASE WHEN p.name IS NOT NULL AND p.name<>'' THEN p.name || ' / #' || c.name ELSE '#' || c.name END FROM channels c LEFT JOIN channels p ON p.guild_id=c.guild_id AND p.id=c.parent_id WHERE NOT c.is_thread AND c.type IN (0,2,5,15,16) ORDER BY COALESCE(p.position,-1),p.id,c.position,lower(c.name),c.id`)
 	if err != nil {
 		return nil, nil, false, false, err
 	}
@@ -123,7 +123,8 @@ func searchMessages(ctx context.Context, db *sql.DB, filter searchFilter, before
 	where := []string{"true"}
 	add := func(value any) string { args = append(args, value); return fmt.Sprintf("$%d", len(args)) }
 	if filter.ChannelID != "" {
-		where = append(where, "m.channel_id="+add(filter.ChannelID))
+		channel := add(filter.ChannelID)
+		where = append(where, "(m.channel_id="+channel+" OR EXISTS (SELECT 1 FROM channels thread WHERE thread.guild_id=m.guild_id AND thread.id=m.channel_id AND thread.is_thread AND thread.parent_id="+channel+"))")
 	}
 	if filter.Author != "" {
 		where = append(where, "m.author_id="+add(filter.Author))

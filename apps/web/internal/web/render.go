@@ -306,7 +306,7 @@ var messagesTemplate = template.Must(template.New("messages").Funcs(funcMap).Par
 </div>
 <script>document.body.classList.add("initial-loading");document.body.setAttribute("aria-busy", "true");document.getElementById("initial-loader").setAttribute("aria-hidden", "false");</script>
 <header>
-<div class="header-row"><h1>{{.Title}}</h1><a class="search-link" href="/search{{if not .All}}?channel={{.Channel.ID}}{{end}}">検索</a></div>
+<div class="header-row"><h1>{{.Title}}</h1><a class="search-link" href="/search{{if not .All}}?channel={{if .Channel.IsThread}}{{.Channel.ParentID}}{{else}}{{.Channel.ID}}{{end}}{{end}}">検索</a></div>
 <div class="crumbs"><a href="/g/{{.GuildID}}">&laquo; channels</a></div>
 <nav class="view-tabs" aria-label="表示切替"><a class="active" href="{{.BasePath}}">メッセージ</a><a href="{{.BasePath}}/images">画像</a><a href="{{.BasePath}}/videos">動画</a><a href="{{.BasePath}}/audio">音声</a><a href="{{.BasePath}}/files">ファイル</a><a href="{{.BasePath}}/embeds">埋め込み</a></nav>
 </header>
@@ -475,7 +475,7 @@ var mediaTemplate = template.Must(template.New("media").Funcs(funcMap).Parse(`<!
 <html><head><meta charset="utf-8"><title>{{.Title}} {{.Kind.Label}} - Discord Archive</title><style>` + baseCSS + `</style></head>
 <body>
 <header>
-<div class="header-row"><h1>{{.Title}}</h1><a class="search-link" href="/search{{if not .All}}?channel={{.Channel.ID}}{{end}}">検索</a></div>
+<div class="header-row"><h1>{{.Title}}</h1><a class="search-link" href="/search{{if not .All}}?channel={{if .Channel.IsThread}}{{.Channel.ParentID}}{{else}}{{.Channel.ID}}{{end}}{{end}}">検索</a></div>
 <div class="crumbs"><a href="/g/{{.GuildID}}">&laquo; channels</a></div>
 <nav class="view-tabs" aria-label="表示切替"><a href="{{.BasePath}}">メッセージ</a>{{range .Kinds}}<a{{if eq $.Kind.Kind .Kind}} class="active"{{end}} href="{{$.BasePath}}/{{.Kind}}">{{.Label}}</a>{{end}}</nav>
 </header>
