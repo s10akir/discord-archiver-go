@@ -217,16 +217,19 @@ func decodeCursor(value string) (*messageCursor, error) {
 	return &cursor, nil
 }
 
-// container is a message-bearing entity: either a regular channel or a
-// thread. Both are stored under messages/date=*/channel_id=<ID>/ the same
-// way, so the viewer treats them uniformly once loaded.
+// container holds the channel metadata needed by the viewer. It includes
+// categories and forum parents as well as message-bearing channels and
+// threads so the channel list can reproduce Discord's hierarchy.
 type container struct {
-	ID       string
-	Name     string
-	Type     discordgo.ChannelType
-	ParentID string
-	IsThread bool
-	Source   string // thread archive source; empty for regular channels
+	ID                 string
+	Name               string
+	Type               discordgo.ChannelType
+	ParentID           string
+	Position           int
+	IsThread           bool
+	CanContainMessages bool
+	LastMessageID      string
+	Source             string // thread archive source; empty for regular channels
 }
 
 var guildDirPattern = regexp.MustCompile(`^guild_id=(.+)$`)
@@ -275,14 +278,14 @@ func loadContainers(root string) (containers []container, names map[string]strin
 	}
 	for _, channel := range channels {
 		names[channel.ID] = channel.Name
-		if !archive.CanContainMessages(channel.Type) {
-			continue
-		}
 		containers = append(containers, container{
-			ID:       channel.ID,
-			Name:     channel.Name,
-			Type:     channel.Type,
-			ParentID: channel.ParentID,
+			ID:                 channel.ID,
+			Name:               channel.Name,
+			Type:               channel.Type,
+			ParentID:           channel.ParentID,
+			Position:           channel.Position,
+			CanContainMessages: archive.CanContainMessages(channel.Type),
+			LastMessageID:      channel.LastMessageID,
 		})
 	}
 
@@ -297,24 +300,17 @@ func loadContainers(root string) (containers []container, names map[string]strin
 	for _, line := range threads {
 		names[line.Thread.ID] = line.Thread.Name
 		containers = append(containers, container{
-			ID:       line.Thread.ID,
-			Name:     line.Thread.Name,
-			Type:     line.Thread.Type,
-			ParentID: line.Thread.ParentID,
-			IsThread: true,
-			Source:   line.Source,
+			ID:                 line.Thread.ID,
+			Name:               line.Thread.Name,
+			Type:               line.Thread.Type,
+			ParentID:           line.Thread.ParentID,
+			Position:           line.Thread.Position,
+			IsThread:           true,
+			CanContainMessages: true,
+			LastMessageID:      line.Thread.LastMessageID,
+			Source:             line.Source,
 		})
 	}
-
-	sort.Slice(containers, func(i, j int) bool {
-		if containers[i].ParentID != containers[j].ParentID {
-			return containers[i].ParentID < containers[j].ParentID
-		}
-		if containers[i].IsThread != containers[j].IsThread {
-			return !containers[i].IsThread
-		}
-		return containers[i].Name < containers[j].Name
-	})
 	return containers, names, nil
 }
 

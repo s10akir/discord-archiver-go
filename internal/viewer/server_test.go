@@ -196,6 +196,82 @@ func TestChannelPageShowsAllDatesInChronologicalOrder(t *testing.T) {
 	assertBefore(t, body, "older same day", "newer message")
 }
 
+func TestChannelListUsesDiscordOrderAndNestsThreads(t *testing.T) {
+	archiveDir := t.TempDir()
+	root := filepath.Join(archiveDir, "guild_id=guild1")
+	metadataDir := filepath.Join(root, "metadata")
+	if err := os.MkdirAll(metadataDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	channels := []*discordgo.Channel{
+		{ID: "cat-later", Name: "Alpha category", Type: discordgo.ChannelTypeGuildCategory, Position: 20},
+		{ID: "cat-first", Name: "Zulu category", Type: discordgo.ChannelTypeGuildCategory, Position: 10},
+		{ID: "text-later", Name: "alpha-channel", Type: discordgo.ChannelTypeGuildText, ParentID: "cat-first", Position: 8},
+		{ID: "text-first", Name: "zulu-channel", Type: discordgo.ChannelTypeGuildText, ParentID: "cat-first", Position: 2},
+		{ID: "forum", Name: "forum-parent", Type: discordgo.ChannelTypeGuildForum, ParentID: "cat-later", Position: 1},
+	}
+	var channelData []byte
+	for _, channel := range channels {
+		line, err := json.Marshal(channelMetaLine{Channel: channel})
+		if err != nil {
+			t.Fatal(err)
+		}
+		channelData = append(channelData, append(line, '\n')...)
+	}
+	if err := os.WriteFile(filepath.Join(metadataDir, "channels.jsonl"), channelData, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	threads := []threadMetaLine{
+		{Thread: &discordgo.Channel{ID: "100", Name: "older-thread", Type: discordgo.ChannelTypeGuildPublicThread, ParentID: "forum", LastMessageID: "200"}},
+		{Thread: &discordgo.Channel{ID: "300", Name: "newer-thread", Type: discordgo.ChannelTypeGuildPublicThread, ParentID: "forum", LastMessageID: "400"}},
+	}
+	var threadData []byte
+	for _, thread := range threads {
+		line, err := json.Marshal(thread)
+		if err != nil {
+			t.Fatal(err)
+		}
+		threadData = append(threadData, append(line, '\n')...)
+	}
+	if err := os.WriteFile(filepath.Join(metadataDir, "threads.jsonl"), threadData, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	handler, err := NewHandler(archiveDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/g/guild1", nil))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusOK)
+	}
+	body := recorder.Body.String()
+	assertBefore := func(first, second string) {
+		t.Helper()
+		firstIndex, secondIndex := strings.Index(body, first), strings.Index(body, second)
+		if firstIndex < 0 || secondIndex < 0 || firstIndex >= secondIndex {
+			t.Fatalf("want %q before %q in channel list", first, second)
+		}
+	}
+	assertBefore("Zulu category", "Alpha category")
+	assertBefore("zulu-channel", "alpha-channel")
+	assertBefore("newer-thread", "older-thread")
+	if strings.Contains(body, `/g/guild1/c/forum`) {
+		t.Fatal("forum parent unexpectedly rendered as a link")
+	}
+	if !strings.Contains(body, `<span class="channel-parent">forum-parent</span>`) ||
+		!strings.Contains(body, `<details class="thread-accordion"><summary>`) ||
+		!strings.Contains(body, `<ul class="thread-list">`) {
+		t.Fatal("forum parent and collapsed nested thread list were not rendered")
+	}
+	if strings.Contains(body, `<details class="thread-accordion" open`) {
+		t.Fatal("thread accordion unexpectedly starts open")
+	}
+}
+
 func TestChannelPageInitiallyRendersOnlyLatestHundredMessages(t *testing.T) {
 	archiveDir := t.TempDir()
 	root := filepath.Join(archiveDir, "guild_id=guild1")

@@ -175,6 +175,16 @@ main { max-width: 900px; margin: 0 auto; padding: 16px 20px 60px; }
   display: inline-block; font-size: 10px; color: #949ba4; border: 1px solid #4a4d53;
   border-radius: 4px; padding: 0 5px; margin-left: 6px; vertical-align: middle;
 }
+.channel-parent { display: block; padding: 7px 10px; color: #dbdee1; font-weight: 600; }
+.thread-accordion > summary { display: flex; align-items: center; cursor: pointer; list-style: none; border-radius: 6px; }
+.thread-accordion > summary::-webkit-details-marker { display: none; }
+.thread-accordion > summary::before { content: "▶"; width: 18px; color: #949ba4; font-size: 9px; text-align: center; transition: transform .12s ease; }
+.thread-accordion[open] > summary::before { transform: rotate(90deg); }
+.thread-accordion > summary:hover { background: #3a3c41; }
+.thread-accordion > summary a, .thread-accordion > summary .channel-parent { flex: 1; }
+.thread-accordion > summary a:hover { background: transparent; }
+.thread-list { list-style: none; margin: 1px 0 5px 18px; padding: 0 0 0 10px; border-left: 1px solid #4a4d53; }
+.thread-list a { padding: 5px 10px; color: #b5bac1; }
 .date-heading {
   display: flex; align-items: center; gap: 12px; margin: 22px 0 10px;
   color: #949ba4; font-size: 12px; font-weight: 600; scroll-margin-top: 70px;
@@ -270,7 +280,11 @@ var channelsTemplate = template.Must(template.New("channels").Funcs(funcMap).Par
 <div class="group">
 <h2>{{.Name}}</h2>
 <ul class="item-list">
-{{range .Items}}<li><a href="/g/{{$.GuildID}}/c/{{.ID}}">{{.Name}}{{if .IsThread}}<span class="badge">thread</span>{{end}}</a></li>{{end}}
+{{range .Items}}<li>
+{{if .Threads}}<details class="thread-accordion"><summary>{{if .HasLink}}<a href="/g/{{$.GuildID}}/c/{{.Channel.ID}}">{{.Channel.Name}}</a>{{else}}<span class="channel-parent">{{.Channel.Name}}</span>{{end}}</summary>
+<ul class="thread-list">{{range .Threads}}<li><a href="/g/{{$.GuildID}}/c/{{.ID}}">{{.Name}}<span class="badge">thread</span></a></li>{{end}}</ul></details>
+{{else}}{{if .HasLink}}<a href="/g/{{$.GuildID}}/c/{{.Channel.ID}}">{{.Channel.Name}}</a>{{else}}<span class="channel-parent">{{.Channel.Name}}</span>{{end}}{{end}}
+</li>{{end}}
 </ul>
 </div>
 {{end}}

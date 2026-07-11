@@ -101,8 +101,17 @@ func (s *server) handleGuilds(w http.ResponseWriter, r *http.Request) {
 }
 
 type channelGroup struct {
-	Name  string
-	Items []container
+	ID            string
+	Name          string
+	Items         []channelItem
+	Position      int
+	Uncategorized bool
+}
+
+type channelItem struct {
+	Channel container
+	Threads []container
+	HasLink bool
 }
 
 func (s *server) handleChannels(w http.ResponseWriter, r *http.Request) {
@@ -115,26 +124,108 @@ func (s *server) handleChannels(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	byParent := make(map[string][]container)
+	channels := make(map[string]container)
+	threadsByParent := make(map[string][]container)
 	for _, c := range containers {
-		byParent[c.ParentID] = append(byParent[c.ParentID], c)
+		if c.IsThread {
+			threadsByParent[c.ParentID] = append(threadsByParent[c.ParentID], c)
+		} else {
+			channels[c.ID] = c
+		}
+	}
+	for parentID := range threadsByParent {
+		sortThreadsByActivity(threadsByParent[parentID])
+	}
+
+	groupsByCategory := make(map[string]*channelGroup)
+	uncategorized := &channelGroup{Name: "その他", Uncategorized: true}
+	for _, channel := range channels {
+		if channel.Type == discordgo.ChannelTypeGuildCategory {
+			groupsByCategory[channel.ID] = &channelGroup{ID: channel.ID, Name: channel.Name, Position: channel.Position}
+		}
+	}
+	for _, channel := range channels {
+		if channel.Type == discordgo.ChannelTypeGuildCategory {
+			continue
+		}
+		threads := threadsByParent[channel.ID]
+		if !channel.CanContainMessages && len(threads) == 0 {
+			continue
+		}
+		item := channelItem{Channel: channel, Threads: threads, HasLink: channel.CanContainMessages}
+		if group := groupsByCategory[channel.ParentID]; group != nil {
+			group.Items = append(group.Items, item)
+		} else {
+			uncategorized.Items = append(uncategorized.Items, item)
+		}
+		delete(threadsByParent, channel.ID)
+	}
+	// Preserve threads whose parent metadata is absent by nesting them under a
+	// non-linkable placeholder instead of promoting them to regular channels.
+	for parentID, threads := range threadsByParent {
+		name := names[parentID]
+		if name == "" {
+			name = "不明なチャンネル"
+		}
+		uncategorized.Items = append(uncategorized.Items, channelItem{
+			Channel: container{ID: parentID, Name: name}, Threads: threads,
+		})
 	}
 
 	var groups []channelGroup
-	for parentID, items := range byParent {
-		name := names[parentID]
-		if name == "" {
-			name = "その他"
-		}
-		sort.Slice(items, func(i, j int) bool { return items[i].Name < items[j].Name })
-		groups = append(groups, channelGroup{Name: name, Items: items})
+	if len(uncategorized.Items) > 0 {
+		sortChannelItems(uncategorized.Items)
+		groups = append(groups, *uncategorized)
 	}
-	sort.Slice(groups, func(i, j int) bool { return groups[i].Name < groups[j].Name })
+	for _, group := range groupsByCategory {
+		if len(group.Items) == 0 {
+			continue
+		}
+		sortChannelItems(group.Items)
+		groups = append(groups, *group)
+	}
+	sort.SliceStable(groups, func(i, j int) bool {
+		if groups[i].Uncategorized != groups[j].Uncategorized {
+			return groups[i].Uncategorized
+		}
+		if groups[i].Position != groups[j].Position {
+			return groups[i].Position < groups[j].Position
+		}
+		return groups[i].ID < groups[j].ID
+	})
 
 	render(w, channelsTemplate, struct {
 		GuildID string
 		Groups  []channelGroup
 	}{guildID, groups})
+}
+
+func sortChannelItems(items []channelItem) {
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].Channel.Position != items[j].Channel.Position {
+			return items[i].Channel.Position < items[j].Channel.Position
+		}
+		return items[i].Channel.ID < items[j].Channel.ID
+	})
+}
+
+func sortThreadsByActivity(threads []container) {
+	sort.Slice(threads, func(i, j int) bool {
+		left, right := threads[i].LastMessageID, threads[j].LastMessageID
+		if left == "" {
+			left = threads[i].ID
+		}
+		if right == "" {
+			right = threads[j].ID
+		}
+		if len(left) != len(right) {
+			return len(left) > len(right)
+		}
+		if left != right {
+			return left > right
+		}
+		return threads[i].ID > threads[j].ID
+	})
 }
 
 type messageSection struct {
