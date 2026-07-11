@@ -46,9 +46,13 @@ func NewHandler(archiveDir string) (http.Handler, error) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /{$}", s.handleGuilds)
 	mux.HandleFunc("GET /g/{guild}", s.handleChannels)
+	mux.HandleFunc("GET /g/{guild}/all", s.handleAllMessages)
+	mux.HandleFunc("GET /g/{guild}/all/messages", s.handleAllMessagePage)
 	mux.HandleFunc("GET /g/{guild}/c/{channel}", s.handleMessages)
 	mux.HandleFunc("GET /g/{guild}/c/{channel}/messages", s.handleMessagePage)
 	for _, kind := range mediaKinds {
+		mux.HandleFunc("GET /g/{guild}/all/"+string(kind.Kind), s.handleAllMedia(kind))
+		mux.HandleFunc("GET /g/{guild}/all/"+string(kind.Kind)+"/items", s.handleAllMediaPage(kind))
 		mux.HandleFunc("GET /g/{guild}/c/{channel}/"+string(kind.Kind), s.handleMedia(kind))
 		mux.HandleFunc("GET /g/{guild}/c/{channel}/"+string(kind.Kind)+"/items", s.handleMediaPage(kind))
 	}
@@ -200,6 +204,17 @@ func (s *server) handleChannels(w http.ResponseWriter, r *http.Request) {
 	}{guildID, groups})
 }
 
+type messagePageView struct {
+	GuildID  string
+	Channel  container
+	Title    string
+	BasePath string
+	All      bool
+	Sections []messageSection
+	Cursor   string
+	HasMore  bool
+}
+
 func sortChannelItems(items []channelItem) {
 	sort.Slice(items, func(i, j int) bool {
 		if items[i].Channel.Position != items[j].Channel.Position {
@@ -253,15 +268,33 @@ func (s *server) handleMessages(w http.ResponseWriter, r *http.Request) {
 		httpError(w, err)
 		return
 	}
-	sections := buildMessageSections(root, guildID, channelID, page.Messages, names)
+	sections := buildMessageSections(root, guildID, page.Messages, names, false)
 
-	render(w, messagesTemplate, struct {
-		GuildID  string
-		Channel  container
-		Sections []messageSection
-		Cursor   string
-		HasMore  bool
-	}{guildID, channel, sections, encodeCursor(page.NextCursor), page.HasMore})
+	render(w, messagesTemplate, messagePageView{
+		GuildID: guildID, Channel: channel, Title: channel.Name,
+		BasePath: "/g/" + guildID + "/c/" + channelID,
+		Sections: sections, Cursor: encodeCursor(page.NextCursor), HasMore: page.HasMore,
+	})
+}
+
+func (s *server) handleAllMessages(w http.ResponseWriter, r *http.Request) {
+	guildID := r.PathValue("guild")
+	root := guildRoot(s.archiveDir, guildID)
+	_, names, err := loadContainers(root)
+	if err != nil {
+		httpError(w, err)
+		return
+	}
+	page, err := s.newMessageStore(root).AllPage(nil, messagePageSize)
+	if err != nil {
+		httpError(w, err)
+		return
+	}
+	render(w, messagesTemplate, messagePageView{
+		GuildID: guildID, Title: "全チャンネル", BasePath: "/g/" + guildID + "/all", All: true,
+		Sections: buildMessageSections(root, guildID, page.Messages, names, true),
+		Cursor:   encodeCursor(page.NextCursor), HasMore: page.HasMore,
+	})
 }
 
 func (s *server) handleMessagePage(w http.ResponseWriter, r *http.Request) {
@@ -286,7 +319,7 @@ func (s *server) handleMessagePage(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	sections := buildMessageSections(root, guildID, channelID, page.Messages, names)
+	sections := buildMessageSections(root, guildID, page.Messages, names, false)
 	var fragment bytes.Buffer
 	if err := messagesTemplate.ExecuteTemplate(&fragment, "sections", sections); err != nil {
 		log.Printf("viewer error: %v", err)
@@ -304,11 +337,54 @@ func (s *server) handleMessagePage(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func (s *server) handleAllMessagePage(w http.ResponseWriter, r *http.Request) {
+	guildID := r.PathValue("guild")
+	root := guildRoot(s.archiveDir, guildID)
+	cursor, err := decodeCursor(r.URL.Query().Get("before"))
+	if err != nil {
+		writeJSONError(w, "invalid cursor", http.StatusBadRequest)
+		return
+	}
+	_, names, err := loadContainers(root)
+	if err != nil {
+		log.Printf("viewer error: %v", err)
+		writeJSONError(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	page, err := s.newMessageStore(root).AllPage(cursor, messagePageSize)
+	if err != nil {
+		log.Printf("viewer error: %v", err)
+		writeJSONError(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	writeMessagePageJSON(w, buildMessageSections(root, guildID, page.Messages, names, true), page)
+}
+
+func writeMessagePageJSON(w http.ResponseWriter, sections []messageSection, page messagePage) {
+	var fragment bytes.Buffer
+	if err := messagesTemplate.ExecuteTemplate(&fragment, "sections", sections); err != nil {
+		log.Printf("viewer error: %v", err)
+		writeJSONError(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	if err := json.NewEncoder(w).Encode(struct {
+		HTML       string `json:"html"`
+		NextCursor string `json:"next_cursor"`
+		HasMore    bool   `json:"has_more"`
+	}{fragment.String(), encodeCursor(page.NextCursor), page.HasMore}); err != nil {
+		log.Printf("encode message page: %v", err)
+	}
+}
+
 type mediaItem struct {
-	AuthorName string
-	Timestamp  string
-	Attachment *attachmentView
-	Embed      *embedView
+	AuthorName  string
+	Timestamp   string
+	ChannelID   string
+	ChannelName string
+	ChannelURL  string
+	Attachment  *attachmentView
+	Embed       *embedView
 }
 
 type mediaKindView struct {
@@ -322,6 +398,19 @@ var mediaKinds = []mediaKindView{
 	{mediaAudio, "音声"},
 	{mediaFile, "ファイル"},
 	{mediaEmbed, "埋め込み"},
+}
+
+type mediaPageView struct {
+	GuildID  string
+	Channel  container
+	Title    string
+	BasePath string
+	All      bool
+	Kind     mediaKindView
+	Kinds    []mediaKindView
+	Items    []mediaItem
+	Cursor   string
+	HasMore  bool
 }
 
 func (s *server) handleMedia(kind mediaKindView) http.HandlerFunc {
@@ -344,16 +433,36 @@ func (s *server) handleMedia(kind mediaKindView) http.HandlerFunc {
 			httpError(w, err)
 			return
 		}
-		items := buildMediaItems(root, guildID, channelID, kind.Kind, page.Messages, names)
-		render(w, mediaTemplate, struct {
-			GuildID string
-			Channel container
-			Kind    mediaKindView
-			Kinds   []mediaKindView
-			Items   []mediaItem
-			Cursor  string
-			HasMore bool
-		}{guildID, channel, kind, mediaKinds, items, encodeCursor(page.NextCursor), page.HasMore})
+		items := buildMediaItems(root, guildID, kind.Kind, page.Messages, names, false)
+		render(w, mediaTemplate, mediaPageView{
+			GuildID: guildID, Channel: channel, Title: channel.Name,
+			BasePath: "/g/" + guildID + "/c/" + channelID,
+			Kind:     kind, Kinds: mediaKinds, Items: items,
+			Cursor: encodeCursor(page.NextCursor), HasMore: page.HasMore,
+		})
+	}
+}
+
+func (s *server) handleAllMedia(kind mediaKindView) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		guildID := r.PathValue("guild")
+		root := guildRoot(s.archiveDir, guildID)
+		_, names, err := loadContainers(root)
+		if err != nil {
+			httpError(w, err)
+			return
+		}
+		page, err := s.newMessageStore(root).AllMediaPage(kind.Kind, nil, messagePageSize)
+		if err != nil {
+			httpError(w, err)
+			return
+		}
+		render(w, mediaTemplate, mediaPageView{
+			GuildID: guildID, Title: "全チャンネル", BasePath: "/g/" + guildID + "/all", All: true,
+			Kind: kind, Kinds: mediaKinds,
+			Items:  buildMediaItems(root, guildID, kind.Kind, page.Messages, names, true),
+			Cursor: encodeCursor(page.NextCursor), HasMore: page.HasMore,
+		})
 	}
 }
 
@@ -379,7 +488,7 @@ func (s *server) handleMediaPage(kind mediaKindView) http.HandlerFunc {
 			writeJSONError(w, "internal error", http.StatusInternalServerError)
 			return
 		}
-		items := buildMediaItems(root, guildID, channelID, kind.Kind, page.Messages, names)
+		items := buildMediaItems(root, guildID, kind.Kind, page.Messages, names, false)
 		var fragment bytes.Buffer
 		if err := mediaTemplate.ExecuteTemplate(&fragment, "media-items", items); err != nil {
 			log.Printf("viewer error: %v", err)
@@ -397,18 +506,64 @@ func (s *server) handleMediaPage(kind mediaKindView) http.HandlerFunc {
 	}
 }
 
-func buildMediaItems(root, guildID, channelID string, kind mediaKind, messages []archivedMessage, names map[string]string) []mediaItem {
+func (s *server) handleAllMediaPage(kind mediaKindView) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		guildID := r.PathValue("guild")
+		root := guildRoot(s.archiveDir, guildID)
+		cursor, err := decodeCursor(r.URL.Query().Get("before"))
+		if err != nil {
+			writeJSONError(w, "invalid cursor", http.StatusBadRequest)
+			return
+		}
+		_, names, err := loadContainers(root)
+		if err != nil {
+			log.Printf("viewer error: %v", err)
+			writeJSONError(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		page, err := s.newMessageStore(root).AllMediaPage(kind.Kind, cursor, messagePageSize)
+		if err != nil {
+			log.Printf("viewer error: %v", err)
+			writeJSONError(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		items := buildMediaItems(root, guildID, kind.Kind, page.Messages, names, true)
+		var fragment bytes.Buffer
+		if err := mediaTemplate.ExecuteTemplate(&fragment, "media-items", items); err != nil {
+			log.Printf("viewer error: %v", err)
+			writeJSONError(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		_ = json.NewEncoder(w).Encode(struct {
+			HTML       string `json:"html"`
+			NextCursor string `json:"next_cursor"`
+			HasMore    bool   `json:"has_more"`
+		}{fragment.String(), encodeCursor(page.NextCursor), page.HasMore})
+	}
+}
+
+func buildMediaItems(root, guildID string, kind mediaKind, messages []archivedMessage, names map[string]string, showChannel bool) []mediaItem {
 	var items []mediaItem
 	for _, archived := range messages {
-		view := buildMessageView(root, guildID, archived.Date, channelID, archived.Message, names)
+		view := buildMessageView(root, guildID, archived, names)
+		base := mediaItem{AuthorName: view.AuthorName, Timestamp: view.Timestamp}
+		if showChannel {
+			base.ChannelID, base.ChannelName = view.ChannelID, view.ChannelName
+			base.ChannelURL = "/g/" + guildID + "/c/" + view.ChannelID + "/" + string(kind)
+		}
 		for i := range view.Attachments {
 			if attachmentMediaKind(archived.Message.Attachments[i]) == kind {
-				items = append(items, mediaItem{AuthorName: view.AuthorName, Timestamp: view.Timestamp, Attachment: &view.Attachments[i]})
+				item := base
+				item.Attachment = &view.Attachments[i]
+				items = append(items, item)
 			}
 		}
 		if kind == mediaEmbed {
 			for i := range view.Embeds {
-				items = append(items, mediaItem{AuthorName: view.AuthorName, Timestamp: view.Timestamp, Embed: &view.Embeds[i]})
+				item := base
+				item.Embed = &view.Embeds[i]
+				items = append(items, item)
 			}
 		}
 	}
@@ -423,14 +578,16 @@ func writeJSONError(w http.ResponseWriter, message string, status int) {
 	}{message})
 }
 
-func buildMessageSections(root, guildID, channelID string, messages []archivedMessage, names map[string]string) []messageSection {
+func buildMessageSections(root, guildID string, messages []archivedMessage, names map[string]string, showChannel bool) []messageSection {
 	var sections []messageSection
 	for _, archived := range messages {
 		if len(sections) == 0 || sections[len(sections)-1].Date != archived.Date {
 			sections = append(sections, messageSection{Date: archived.Date})
 		}
 		section := &sections[len(sections)-1]
-		section.Messages = append(section.Messages, buildMessageView(root, guildID, archived.Date, channelID, archived.Message, names))
+		view := buildMessageView(root, guildID, archived, names)
+		view.ShowChannel = showChannel
+		section.Messages = append(section.Messages, view)
 	}
 	return sections
 }
@@ -466,6 +623,10 @@ type messageView struct {
 	Attachments  []attachmentView
 	Embeds       []embedView
 	Reactions    []reactionView
+	ChannelID    string
+	ChannelName  string
+	ChannelURL   string
+	ShowChannel  bool
 }
 
 type attachmentView struct {
@@ -495,10 +656,22 @@ type reactionView struct {
 	Count int
 }
 
-func buildMessageView(root, guildID, date, channelID string, m *discordgo.Message, names map[string]string) messageView {
+func buildMessageView(root, guildID string, archived archivedMessage, names map[string]string) messageView {
+	m := archived.Message
+	channelID := archived.ChannelID
+	channelName := archived.ChannelName
+	if channelName == "" {
+		channelName = names[channelID]
+	}
+	if channelName == "" {
+		channelName = channelID
+	}
 	v := messageView{
-		Timestamp: m.Timestamp.Local().Format("2006-01-02 15:04:05"),
-		Edited:    m.EditedTimestamp != nil,
+		Timestamp:   m.Timestamp.Local().Format("2006-01-02 15:04:05"),
+		Edited:      m.EditedTimestamp != nil,
+		ChannelID:   channelID,
+		ChannelName: channelName,
+		ChannelURL:  "/g/" + guildID + "/c/" + channelID,
 	}
 
 	if m.Author != nil {
@@ -529,9 +702,9 @@ func buildMessageView(root, guildID, date, channelID string, m *discordgo.Messag
 		av.IsImage = kind == mediaImage
 		av.IsVideo = kind == mediaVideo
 		av.IsAudio = kind == mediaAudio
-		if hasLocalAttachment(root, date, channelID, m.ID, a) {
+		if hasLocalAttachment(root, archived.Date, channelID, m.ID, a) {
 			av.Available = true
-			av.URL = attachmentURL(guildID, date, channelID, m.ID, a)
+			av.URL = attachmentURL(guildID, archived.Date, channelID, m.ID, a)
 		}
 		v.Attachments = append(v.Attachments, av)
 	}

@@ -96,6 +96,46 @@ func TestJSONLMessageStoreOrdersEqualTimestampsByID(t *testing.T) {
 	}
 }
 
+func TestJSONLMessageStoreAllPagesAcrossChannelsWithoutGaps(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "guild_id=guild1")
+	base := time.Date(2026, 7, 11, 0, 0, 0, 0, time.UTC)
+	for i := 0; i < 60; i++ {
+		writeViewerMessagesForChannel(t, root, "2026-07-11", "channel1", "general",
+			testMessage(fmt.Sprintf("a-%03d", i), base.Add(time.Duration(i*2)*time.Second).Format(time.RFC3339), "a", nil))
+		writeViewerMessagesForChannel(t, root, "2026-07-11", "thread1", "topic",
+			testMessage(fmt.Sprintf("b-%03d", i), base.Add(time.Duration(i*2+1)*time.Second).Format(time.RFC3339), "b", nil))
+	}
+
+	store := jsonlMessageStore{root: root}
+	latest, err := store.AllPage(nil, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := len(latest.Messages), 100; got != want || !latest.HasMore {
+		t.Fatalf("latest page = %d messages, has_more=%v; want %d, true", got, latest.HasMore, want)
+	}
+	if got, want := latest.Messages[0].Message.ID, "a-010"; got != want {
+		t.Fatalf("latest oldest ID = %q, want %q", got, want)
+	}
+	if got, want := latest.Messages[99].Message.ID, "b-059"; got != want {
+		t.Fatalf("latest newest ID = %q, want %q", got, want)
+	}
+
+	older, err := store.AllPage(latest.NextCursor, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := len(older.Messages), 20; got != want || older.HasMore {
+		t.Fatalf("older page = %d messages, has_more=%v; want %d, false", got, older.HasMore, want)
+	}
+	if got, want := older.Messages[0].Message.ID, "a-000"; got != want {
+		t.Fatalf("oldest ID = %q, want %q", got, want)
+	}
+	if got, want := older.Messages[19].Message.ID, "b-009"; got != want {
+		t.Fatalf("older newest ID = %q, want %q", got, want)
+	}
+}
+
 func TestJSONLMessageStoreMediaPageSkipsOtherKindsAndPagesNewestFirst(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "guild_id=guild1")
 	base := time.Date(2026, 7, 11, 0, 0, 0, 0, time.UTC)
@@ -325,6 +365,41 @@ func TestChannelPageWithoutMessagesShowsEmptyState(t *testing.T) {
 	}
 }
 
+func TestAllChannelsPageShowsSourcesAndChannelSpecificLinks(t *testing.T) {
+	archiveDir := t.TempDir()
+	root := filepath.Join(archiveDir, "guild_id=guild1")
+	writeViewerMetadata(t, root)
+	writeViewerMessagesForChannel(t, root, "2026-07-11", "channel1", "general",
+		testMessage("first", "2026-07-11T08:00:00Z", "general marker", nil))
+	attachment := &discordgo.MessageAttachment{ID: "image", Filename: "photo.png", ContentType: "image/png"}
+	writeViewerMessagesForChannel(t, root, "2026-07-11", "thread1", "topic",
+		testMessage("second", "2026-07-11T09:00:00Z", "thread marker", attachment))
+
+	handler, err := NewHandler(archiveDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tt := range []struct {
+		path string
+		want []string
+	}{
+		{"/g/guild1", []string{`href="/g/guild1/all"`, "全チャンネル"}},
+		{"/g/guild1/all", []string{"general marker", "thread marker", `href="/g/guild1/c/channel1"`, "#general", `href="/g/guild1/c/thread1"`, "#topic", `href="/g/guild1/all/images"`}},
+		{"/g/guild1/all/images", []string{"photo.png", `href="/g/guild1/c/thread1/images"`, "#topic"}},
+	} {
+		recorder := httptest.NewRecorder()
+		handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, tt.path, nil))
+		if recorder.Code != http.StatusOK {
+			t.Fatalf("%s status = %d, want %d", tt.path, recorder.Code, http.StatusOK)
+		}
+		for _, want := range tt.want {
+			if !strings.Contains(recorder.Body.String(), want) {
+				t.Errorf("%s response does not contain %q", tt.path, want)
+			}
+		}
+	}
+}
+
 func TestMediaKindPagesRenderOnlyMatchingCards(t *testing.T) {
 	archiveDir := t.TempDir()
 	root := filepath.Join(archiveDir, "guild_id=guild1")
@@ -527,14 +602,21 @@ func writeViewerMetadata(t *testing.T, root string) {
 }
 
 func writeViewerMessages(t *testing.T, root, date string, messages ...*discordgo.Message) {
+	writeViewerMessagesForChannel(t, root, date, "channel1", "general", messages...)
+}
+
+func writeViewerMessagesForChannel(t *testing.T, root, date, channelID, channelName string, messages ...*discordgo.Message) {
 	t.Helper()
-	path := filepath.Join(root, "messages", "date="+date, "channel_id=channel1", "messages.jsonl")
+	path := filepath.Join(root, "messages", "date="+date, "channel_id="+channelID, "messages.jsonl")
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	var data []byte
+	data, err := os.ReadFile(path)
+	if err != nil && !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
 	for _, message := range messages {
-		line, err := json.Marshal(messageLine{ChannelID: "channel1", ChannelName: "general", Message: message})
+		line, err := json.Marshal(messageLine{ChannelID: channelID, ChannelName: channelName, Message: message})
 		if err != nil {
 			t.Fatal(err)
 		}

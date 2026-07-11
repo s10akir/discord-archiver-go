@@ -205,6 +205,7 @@ main { max-width: 900px; margin: 0 auto; padding: 16px 20px 60px; }
 .msg-head { display: flex; align-items: baseline; gap: 8px; }
 .author { font-weight: 600; color: #f2f3f5; }
 .timestamp { font-size: 12px; color: #949ba4; }
+.source-channel { font-size: 12px; color: #949ba4; }
 .edited { font-size: 11px; color: #949ba4; }
 .content { overflow-wrap: anywhere; line-height: 1.4; }
 .content > :first-child { margin-top: 0; }
@@ -275,6 +276,7 @@ var channelsTemplate = template.Must(template.New("channels").Funcs(funcMap).Par
 <body>
 <header><h1>Guild {{.GuildID}}</h1><div class="crumbs"><a href="/">&laquo; guilds</a></div></header>
 <main>
+<div class="group"><h2>横断表示</h2><ul class="item-list"><li><a href="/g/{{.GuildID}}/all">全チャンネル</a></li></ul></div>
 {{if not .Groups}}<p class="empty">チャンネルが見つかりませんでした。</p>{{end}}
 {{range .Groups}}
 <div class="group">
@@ -293,7 +295,7 @@ var channelsTemplate = template.Must(template.New("channels").Funcs(funcMap).Par
 `))
 
 var messagesTemplate = template.Must(template.New("messages").Funcs(funcMap).Parse(`<!doctype html>
-<html><head><meta charset="utf-8"><title>{{.Channel.Name}} - Discord Archive</title><style>` + baseCSS + `</style></head>
+<html><head><meta charset="utf-8"><title>{{.Title}} - Discord Archive</title><style>` + baseCSS + `</style></head>
 <body>
 <div id="initial-loader" class="initial-loader" role="status" aria-live="polite" aria-hidden="true">
   <div class="loading-spinner" aria-hidden="true"></div>
@@ -301,9 +303,9 @@ var messagesTemplate = template.Must(template.New("messages").Funcs(funcMap).Par
 </div>
 <script>document.body.classList.add("initial-loading");document.body.setAttribute("aria-busy", "true");document.getElementById("initial-loader").setAttribute("aria-hidden", "false");</script>
 <header>
-<h1>{{.Channel.Name}}</h1>
+<h1>{{.Title}}</h1>
 <div class="crumbs"><a href="/g/{{.GuildID}}">&laquo; channels</a></div>
-<nav class="view-tabs" aria-label="表示切替"><a class="active" href="/g/{{.GuildID}}/c/{{.Channel.ID}}">メッセージ</a><a href="/g/{{.GuildID}}/c/{{.Channel.ID}}/images">画像</a><a href="/g/{{.GuildID}}/c/{{.Channel.ID}}/videos">動画</a><a href="/g/{{.GuildID}}/c/{{.Channel.ID}}/audio">音声</a><a href="/g/{{.GuildID}}/c/{{.Channel.ID}}/files">ファイル</a><a href="/g/{{.GuildID}}/c/{{.Channel.ID}}/embeds">埋め込み</a></nav>
+<nav class="view-tabs" aria-label="表示切替"><a class="active" href="{{.BasePath}}">メッセージ</a><a href="{{.BasePath}}/images">画像</a><a href="{{.BasePath}}/videos">動画</a><a href="{{.BasePath}}/audio">音声</a><a href="{{.BasePath}}/files">ファイル</a><a href="{{.BasePath}}/embeds">埋め込み</a></nav>
 </header>
 <main>
 {{if not .Sections}}<p class="empty">アーカイブされたメッセージがありません。</p>{{end}}
@@ -439,6 +441,7 @@ finishInitialLoading();
     <div class="msg-head">
       <span class="author">{{.AuthorName}}</span>
       <span class="timestamp">{{.Timestamp}}</span>
+      {{if .ShowChannel}}<a class="source-channel" href="{{.ChannelURL}}">#{{.ChannelName}}</a>{{end}}
       {{if .Edited}}<span class="edited">(編集済み)</span>{{end}}
     </div>
     {{if .Content}}<div class="content">{{.Content}}</div>{{end}}
@@ -466,12 +469,12 @@ finishInitialLoading();
 `))
 
 var mediaTemplate = template.Must(template.New("media").Funcs(funcMap).Parse(`<!doctype html>
-<html><head><meta charset="utf-8"><title>{{.Channel.Name}} {{.Kind.Label}} - Discord Archive</title><style>` + baseCSS + `</style></head>
+<html><head><meta charset="utf-8"><title>{{.Title}} {{.Kind.Label}} - Discord Archive</title><style>` + baseCSS + `</style></head>
 <body>
 <header>
-<h1>{{.Channel.Name}}</h1>
+<h1>{{.Title}}</h1>
 <div class="crumbs"><a href="/g/{{.GuildID}}">&laquo; channels</a></div>
-<nav class="view-tabs" aria-label="表示切替"><a href="/g/{{.GuildID}}/c/{{.Channel.ID}}">メッセージ</a>{{range .Kinds}}<a{{if eq $.Kind.Kind .Kind}} class="active"{{end}} href="/g/{{$.GuildID}}/c/{{$.Channel.ID}}/{{.Kind}}">{{.Label}}</a>{{end}}</nav>
+<nav class="view-tabs" aria-label="表示切替"><a href="{{.BasePath}}">メッセージ</a>{{range .Kinds}}<a{{if eq $.Kind.Kind .Kind}} class="active"{{end}} href="{{$.BasePath}}/{{.Kind}}">{{.Label}}</a>{{end}}</nav>
 </header>
 <main>
 {{if not .Items}}<p id="media-empty" class="empty">アーカイブされた{{.Kind.Label}}がありません。</p>{{end}}
@@ -536,7 +539,7 @@ if (sentinel.dataset.hasMore === "true") observer.observe(sentinel);
       </div>{{else if not .ImageURL}}<div class="media-placeholder">埋め込み</div>{{end}}
     </div>
   {{end}}
-  <div class="media-meta"><span class="media-author">{{.AuthorName}}</span><time>{{.Timestamp}}</time></div>
+  <div class="media-meta"><span class="media-author">{{.AuthorName}}</span><time>{{.Timestamp}}</time>{{if .ChannelURL}} <a class="source-channel" href="{{.ChannelURL}}">#{{.ChannelName}}</a>{{end}}</div>
 </article>
 {{end}}{{end}}
 `))

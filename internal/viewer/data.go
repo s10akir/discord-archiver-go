@@ -41,8 +41,10 @@ type messageLine struct {
 }
 
 type archivedMessage struct {
-	Date    string
-	Message *discordgo.Message
+	Date        string
+	ChannelID   string
+	ChannelName string
+	Message     *discordgo.Message
 }
 
 type messageCursor struct {
@@ -60,6 +62,8 @@ type messagePage struct {
 type messageStore interface {
 	Page(channelID string, before *messageCursor, limit int) (messagePage, error)
 	MediaPage(channelID string, kind mediaKind, before *messageCursor, limit int) (messagePage, error)
+	AllPage(before *messageCursor, limit int) (messagePage, error)
+	AllMediaPage(kind mediaKind, before *messageCursor, limit int) (messagePage, error)
 }
 
 type mediaKind string
@@ -90,6 +94,31 @@ func (s jsonlMessageStore) Page(channelID string, before *messageCursor, limit i
 
 func (s jsonlMessageStore) MediaPage(channelID string, kind mediaKind, before *messageCursor, limit int) (messagePage, error) {
 	return s.page(channelID, before, limit, func(message *discordgo.Message) bool {
+		if kind == mediaEmbed {
+			return len(message.Embeds) > 0
+		}
+		for _, attachment := range message.Attachments {
+			if attachmentMediaKind(attachment) == kind {
+				return true
+			}
+		}
+		return false
+	})
+}
+
+func (s jsonlMessageStore) AllPage(before *messageCursor, limit int) (messagePage, error) {
+	page, err := s.allPage(before, limit, nil)
+	if err != nil {
+		return messagePage{}, err
+	}
+	for i, j := 0, len(page.Messages)-1; i < j; i, j = i+1, j-1 {
+		page.Messages[i], page.Messages[j] = page.Messages[j], page.Messages[i]
+	}
+	return page, nil
+}
+
+func (s jsonlMessageStore) AllMediaPage(kind mediaKind, before *messageCursor, limit int) (messagePage, error) {
+	return s.allPage(before, limit, func(message *discordgo.Message) bool {
 		if kind == mediaEmbed {
 			return len(message.Embeds) > 0
 		}
@@ -152,19 +181,20 @@ func (s jsonlMessageStore) page(channelID string, before *messageCursor, limit i
 		if before != nil && date > before.Date {
 			continue
 		}
-		messages, err := loadMessages(s.root, date, channelID)
+		messages, err := loadArchivedMessages(s.root, date, channelID)
 		if err != nil {
 			return messagePage{}, err
 		}
 		for j := len(messages) - 1; j >= 0 && len(collected) <= limit; j-- {
-			message := messages[j]
+			archived := messages[j]
+			message := archived.Message
 			if before != nil && date == before.Date && !messageBefore(message, cursorTime, before.ID) {
 				continue
 			}
 			if include != nil && !include(message) {
 				continue
 			}
-			collected = append(collected, archivedMessage{Date: date, Message: message})
+			collected = append(collected, archived)
 		}
 	}
 
@@ -180,6 +210,56 @@ func (s jsonlMessageStore) page(channelID string, before *messageCursor, limit i
 			Timestamp: oldest.Message.Timestamp.Format(time.RFC3339Nano),
 			ID:        oldest.Message.ID,
 		}
+	}
+	return page, nil
+}
+
+func (s jsonlMessageStore) allPage(before *messageCursor, limit int, include func(*discordgo.Message) bool) (messagePage, error) {
+	if limit <= 0 {
+		return messagePage{}, nil
+	}
+	dates, err := listAllDates(s.root)
+	if err != nil {
+		return messagePage{}, err
+	}
+	var cursorTime time.Time
+	if before != nil {
+		cursorTime, err = time.Parse(time.RFC3339Nano, before.Timestamp)
+		if err != nil {
+			return messagePage{}, fmt.Errorf("parse cursor timestamp: %w", err)
+		}
+	}
+
+	collected := make([]archivedMessage, 0, limit+1)
+	for i := len(dates) - 1; i >= 0 && len(collected) <= limit; i-- {
+		date := dates[i]
+		if before != nil && date > before.Date {
+			continue
+		}
+		messages, err := loadAllMessages(s.root, date)
+		if err != nil {
+			return messagePage{}, err
+		}
+		for j := len(messages) - 1; j >= 0 && len(collected) <= limit; j-- {
+			archived := messages[j]
+			if before != nil && date == before.Date && !messageBefore(archived.Message, cursorTime, before.ID) {
+				continue
+			}
+			if include != nil && !include(archived.Message) {
+				continue
+			}
+			collected = append(collected, archived)
+		}
+	}
+
+	hasMore := len(collected) > limit
+	if hasMore {
+		collected = collected[:limit]
+	}
+	page := messagePage{Messages: collected, HasMore: hasMore}
+	if hasMore && len(collected) > 0 {
+		oldest := collected[len(collected)-1]
+		page.NextCursor = &messageCursor{Date: oldest.Date, Timestamp: oldest.Message.Timestamp.Format(time.RFC3339Nano), ID: oldest.Message.ID}
 	}
 	return page, nil
 }
@@ -324,6 +404,28 @@ func findContainer(containers []container, id string) (container, bool) {
 }
 
 var dateDirPattern = regexp.MustCompile(`^date=(\d{4}-\d{2}-\d{2})$`)
+var channelDirPattern = regexp.MustCompile(`^channel_id=(.+)$`)
+
+func listAllDates(root string) ([]string, error) {
+	messagesRoot := filepath.Join(root, "messages")
+	entries, err := os.ReadDir(messagesRoot)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("read messages directory: %w", err)
+	}
+	var dates []string
+	for _, entry := range entries {
+		if entry.IsDir() {
+			if match := dateDirPattern.FindStringSubmatch(entry.Name()); match != nil {
+				dates = append(dates, match[1])
+			}
+		}
+	}
+	sort.Strings(dates)
+	return dates, nil
+}
 
 // listDates returns, in ascending order, every date for which channelID has
 // an archived messages.jsonl file.
@@ -358,12 +460,28 @@ func listDates(root, channelID string) ([]string, error) {
 // loadMessages reads and sorts (ascending by timestamp) every message
 // archived for channelID on date.
 func loadMessages(root, date, channelID string) ([]*discordgo.Message, error) {
+	archived, err := loadArchivedMessages(root, date, channelID)
+	if err != nil {
+		return nil, err
+	}
+	messages := make([]*discordgo.Message, 0, len(archived))
+	for _, item := range archived {
+		messages = append(messages, item.Message)
+	}
+	return messages, nil
+}
+
+func loadArchivedMessages(root, date, channelID string) ([]archivedMessage, error) {
 	path := filepath.Join(root, "messages", "date="+date, "channel_id="+channelID, "messages.jsonl")
 
-	var messages []*discordgo.Message
+	var messages []archivedMessage
 	err := decodeJSONLines(path, func(line messageLine) {
 		if line.Message != nil {
-			messages = append(messages, line.Message)
+			id := line.ChannelID
+			if id == "" {
+				id = channelID
+			}
+			messages = append(messages, archivedMessage{Date: date, ChannelID: id, ChannelName: line.ChannelName, Message: line.Message})
 		}
 	})
 	if err != nil {
@@ -371,10 +489,40 @@ func loadMessages(root, date, channelID string) ([]*discordgo.Message, error) {
 	}
 
 	sort.Slice(messages, func(i, j int) bool {
-		if messages[i].Timestamp.Equal(messages[j].Timestamp) {
-			return messages[i].ID < messages[j].ID
+		if messages[i].Message.Timestamp.Equal(messages[j].Message.Timestamp) {
+			return messages[i].Message.ID < messages[j].Message.ID
 		}
-		return messages[i].Timestamp.Before(messages[j].Timestamp)
+		return messages[i].Message.Timestamp.Before(messages[j].Message.Timestamp)
+	})
+	return messages, nil
+}
+
+func loadAllMessages(root, date string) ([]archivedMessage, error) {
+	dateRoot := filepath.Join(root, "messages", "date="+date)
+	entries, err := os.ReadDir(dateRoot)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("read date directory: %w", err)
+	}
+	var messages []archivedMessage
+	for _, entry := range entries {
+		match := channelDirPattern.FindStringSubmatch(entry.Name())
+		if !entry.IsDir() || match == nil {
+			continue
+		}
+		channelMessages, err := loadArchivedMessages(root, date, match[1])
+		if err != nil {
+			return nil, err
+		}
+		messages = append(messages, channelMessages...)
+	}
+	sort.Slice(messages, func(i, j int) bool {
+		if messages[i].Message.Timestamp.Equal(messages[j].Message.Timestamp) {
+			return messages[i].Message.ID < messages[j].Message.ID
+		}
+		return messages[i].Message.Timestamp.Before(messages[j].Message.Timestamp)
 	})
 	return messages, nil
 }
