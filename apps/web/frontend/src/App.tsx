@@ -554,7 +554,7 @@ function MessageSections({
   sections: Section[];
   belowViewTabs?: boolean;
 }) {
-  const stickyTop = belowViewTabs ? "top-28" : "top-16";
+  const stickyTop = belowViewTabs ? "top-29" : "top-17";
   return (
     <div className="space-y-7">
       {sections.map((section, index) => (
