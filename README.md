@@ -88,27 +88,15 @@ go run ./apps/archiver/cmd/discord-archiver -out-dir archive -attachments=false
 
 アーカイブ済みデータをPostgreSQLから閲覧・検索するWebアプリです。添付ファイルの実体だけをarchiveディレクトリからread-onlyで配信します。
 
+開発・動作確認ではDocker Composeを使います。Web単体を更新する場合も、Compose経由でイメージを再ビルドします。
+
 ```bash
-DATABASE_URL='postgres://discord_archive:discord_archive@localhost:5432/discord_archive?sslmode=disable' \
-  go run ./apps/web/cmd/discord-archive-web -out-dir archive -addr :8080
+docker compose up -d --build discord-archive-web discord-archive-importer
 ```
 
 `http://localhost:8080/` ではギルド、チャンネル/スレッド、メッセージ、メディアを閲覧できます。`/search` では本文・投稿者・添付名・embedの部分一致と、guild、channel、期間、添付、メディア種別による絞り込みを利用できます。
 
-Web UIはReact、Vite、Tailwind CSS、shadcn/uiをベースにしています。フロントエンドを開発する場合は、別ターミナルでGo APIとVite dev serverを起動します。Viteは`/api`と`/files`を`:8080`へproxyします。
-
-```bash
-cd apps/web/frontend
-npm install
-npm run dev
-```
-
-本番用アセットは次のコマンドで`apps/web/internal/web/frontend`へ生成され、Goバイナリへ埋め込まれます。
-
-```bash
-cd apps/web/frontend
-npm run build
-```
+Web UIはReact、Vite、Tailwind CSS、shadcn/uiをベースにしています。本番用アセットはWebイメージのビルド中に生成され、Goバイナリへ埋め込まれます。生成先の`apps/web/internal/web/frontend`はGitおよびDockerのビルドコンテキストでは管理しません。
 
 ```dotenv
 DISCORD_ARCHIVE_WEB_ADDR=:8080
@@ -126,22 +114,19 @@ DISCORD_ARCHIVE_WEB_URL=http://localhost:8080 \
 
 ## Development
 
-ルートの `go.work` に4つのmoduleを登録しています。全moduleのテストと各アプリのビルドは次のように実行します。
+ルートの `go.work` に4つのmoduleを登録しています。Webは埋め込み用フロントエンドアセットをイメージ内で生成するため、開発環境ではネイティブにビルドせずDocker Composeを使います。
 
 ```bash
 GOCACHE=/tmp/go-build-cache GOMODCACHE=/tmp/go-mod-cache \
-  go test ./apps/archiver/... ./apps/web/... ./apps/importer/... ./pkg/archiveformat/...
-
-(cd apps/web/frontend && npm run build)
+  go test ./apps/archiver/... ./apps/importer/... ./pkg/archiveformat/...
 
 GOCACHE=/tmp/go-build-cache GOMODCACHE=/tmp/go-mod-cache \
   go build -o /tmp/discord-archiver ./apps/archiver/cmd/discord-archiver
 
 GOCACHE=/tmp/go-build-cache GOMODCACHE=/tmp/go-mod-cache \
-  go build -o /tmp/discord-archive-web ./apps/web/cmd/discord-archive-web
-
-GOCACHE=/tmp/go-build-cache GOMODCACHE=/tmp/go-mod-cache \
   go build -o /tmp/discord-archive-importer ./apps/importer/cmd/discord-archive-importer
+
+docker compose build discord-archive-web
 ```
 
 ## Docker

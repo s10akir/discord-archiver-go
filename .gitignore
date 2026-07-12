@@ -28,3 +28,4 @@
 /archive/
 node_modules/
 *.tsbuildinfo
+apps/web/internal/web/frontend/
