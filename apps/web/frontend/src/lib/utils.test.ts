@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatBytes, newestFirstSections } from "./utils";
+import { chronologicalSections, formatBytes } from "./utils";
 import type { Message, Page, Section } from "../types";
 
 describe("formatBytes", () => {
@@ -10,15 +10,15 @@ describe("formatBytes", () => {
   });
 });
 
-describe("newestFirstSections", () => {
+describe("chronologicalSections", () => {
   const message = (timestamp: string): Message => ({
     author_id: "1", author_name: "user", timestamp, edited: false,
     attachments: [], embeds: [], reactions: [], channel_id: "1", channel_name: "general",
   });
   const page = (items: Section[]): Page<Section> => ({ items, next_cursor: "", has_more: false });
 
-  it("appends older pages below and merges a date split across pages", () => {
-    const result = newestFirstSections([
+  it("prepends older pages and merges a date split across pages", () => {
+    const result = chronologicalSections([
       page([{ date: "2026-07-12", messages: [message("12:00"), message("13:00")] }]),
       page([
         { date: "2026-07-11", messages: [message("23:00")] },
@@ -26,7 +26,7 @@ describe("newestFirstSections", () => {
       ]),
     ]);
 
-    expect(result.map(section => section.date)).toEqual(["2026-07-12", "2026-07-11"]);
-    expect(result[0].messages.map(item => item.timestamp)).toEqual(["13:00", "12:00", "00:00"]);
+    expect(result.map(section => section.date)).toEqual(["2026-07-11", "2026-07-12"]);
+    expect(result[1].messages.map(item => item.timestamp)).toEqual(["00:00", "12:00", "13:00"]);
   });
 });
