@@ -376,7 +376,7 @@ const mediaTabs = [
 function ViewTabs({ guild, channel, active }: { guild: string; channel: string; active: string }) {
   const q = channel ? `?channel=${channel}` : "";
   return (
-    <div className="flex gap-1 overflow-x-auto border-b px-4">
+    <div className="sticky top-16 z-20 flex gap-1 overflow-x-auto border-b bg-background/90 px-4 backdrop-blur">
       {" "}
       <Link
         to={`/guilds/${guild}/messages${q}`}
