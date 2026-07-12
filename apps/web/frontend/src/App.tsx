@@ -773,6 +773,9 @@ function MediaCard({ item }: { item: MediaItem }) {
 
 function SearchPage() {
   const [params, setParams] = useSearchParams();
+  const keywordParam = params.get("q") || "";
+  const [keyword, setKeyword] = useState(keywordParam);
+  const composingKeyword = useRef(false);
   const options = useQuery({
     queryKey: ["search-options"],
     queryFn: ({ signal }) => api.searchOptions(signal),
@@ -793,6 +796,9 @@ function SearchPage() {
     value ? next.set(name, value) : next.delete(name);
     setParams(next);
   };
+  useEffect(() => {
+    if (!composingKeyword.current) setKeyword(keywordParam);
+  }, [keywordParam]);
   const sections = results.data?.pages.flatMap((p) => p.items) ?? [];
   return (
     <>
@@ -801,8 +807,18 @@ function SearchPage() {
         <Card className="mb-6 grid gap-3 p-4 md:grid-cols-3">
           <Field label="キーワード">
             <input
-              value={params.get("q") || ""}
-              onChange={(e) => update("q", e.target.value)}
+              value={keyword}
+              onCompositionStart={() => {
+                composingKeyword.current = true;
+              }}
+              onCompositionEnd={(e) => {
+                composingKeyword.current = false;
+                update("q", e.currentTarget.value);
+              }}
+              onChange={(e) => {
+                setKeyword(e.target.value);
+                if (!composingKeyword.current) update("q", e.target.value);
+              }}
               className="input"
               placeholder="本文、投稿者、添付…"
             />
