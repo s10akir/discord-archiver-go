@@ -1,31 +1,898 @@
-import {useEffect,useLayoutEffect,useRef,useState}from"react";import{Link,Navigate,Outlet,Route,Routes,useLocation,useNavigate,useParams,useSearchParams}from"react-router-dom";import{useInfiniteQuery,useQuery}from"@tanstack/react-query";import{Archive,ChevronDown,File,Hash,Image,Menu,MessageSquare,Mic2,Moon,PanelLeftClose,Search,Sun,Video,X}from"lucide-react";import{api}from"./api";import{Badge,Button,Card,Empty,ErrorState,Skeleton}from"./components/ui";import{chronologicalSections,formatBytes}from"./lib/utils";import type{Attachment,Embed,MediaItem,Message,Section}from"./types";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import {
+  Link,
+  Navigate,
+  Outlet,
+  Route,
+  Routes,
+  useLocation,
+  useNavigate,
+  useParams,
+  useSearchParams,
+} from "react-router-dom";
+import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
+import {
+  Archive,
+  ChevronDown,
+  File,
+  Hash,
+  Image,
+  Menu,
+  MessageSquare,
+  Mic2,
+  Moon,
+  PanelLeftClose,
+  Search,
+  Sun,
+  Video,
+  X,
+} from "lucide-react";
+import { api } from "./api";
+import { Badge, Button, Card, Empty, ErrorState, Skeleton } from "./components/ui";
+import { chronologicalSections, formatBytes } from "./lib/utils";
+import type { Attachment, Embed, MediaItem, Message, Section } from "./types";
 
-function ThemeButton(){const[dark,setDark]=useState(()=>document.documentElement.classList.contains("dark"));return <Button aria-label="テーマを切り替え" onClick={()=>{const next=!dark;setDark(next);document.documentElement.classList.toggle("dark",next);localStorage.setItem("theme",next?"dark":"light")}}>{dark?<Sun size={16}/>:<Moon size={16}/>}</Button>}
-function Header({title}:{title:string}){return <header className="sticky top-0 z-20 flex h-16 items-center gap-3 border-b bg-background/90 px-4 backdrop-blur"><MobileNav/><h1 className="min-w-0 flex-1 truncate text-lg font-semibold">{title}</h1><Button onClick={()=>location.assign("/search")}><Search size={16}/><span className="hidden sm:inline">検索</span></Button><ThemeButton/></header>}
-function MobileNav(){const[open,setOpen]=useState(false);return <><Button className="lg:hidden" aria-label="ナビゲーション" onClick={()=>setOpen(true)}><Menu size={18}/></Button>{open&&<div className="fixed inset-0 z-50 bg-black/50 lg:hidden" onClick={()=>setOpen(false)}><aside className="h-full w-[85vw] max-w-sm bg-background p-3" onClick={e=>e.stopPropagation()}><div className="mb-3 flex justify-end"><Button onClick={()=>setOpen(false)}><X size={18}/></Button></div><NavContent onNavigate={()=>setOpen(false)}/></aside></div>}</>}
-function NavContent({onNavigate}:{onNavigate?:()=>void}){const{guildId}=useParams();const guilds=useQuery({queryKey:["guilds"],queryFn:({signal})=>api.guilds(signal)});const navigation=useQuery({queryKey:["navigation",guildId],queryFn:({signal})=>api.navigation(guildId!,signal),enabled:!!guildId});return <nav className="space-y-5"><Link to="/guilds" onClick={onNavigate} className="flex items-center gap-2 px-2 text-lg font-bold"><Archive size={20}/>Archive</Link><div className="space-y-1">{guilds.data?.guilds.map(g=><Link key={g} onClick={onNavigate} to={`/guilds/${g}`} className={`block truncate rounded-md px-2 py-1.5 text-sm ${g===guildId?"bg-primary text-primary-foreground":"hover:bg-muted"}`}>{g}</Link>)}</div>{guildId&&<><Link onClick={onNavigate} to={`/guilds/${guildId}/messages`} className="flex items-center gap-2 rounded-md px-2 py-2 text-sm hover:bg-muted"><MessageSquare size={16}/>全チャンネル</Link>{navigation.data?.groups.map(group=><div key={group.id||group.name}><p className="mb-1 px-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">{group.name}</p>{group.items.map(channel=><div key={channel.id}><ChannelLink guild={guildId} channel={channel} onNavigate={onNavigate}/>{channel.threads?.map(thread=><ChannelLink key={thread.id} guild={guildId} channel={thread} nested onNavigate={onNavigate}/>)}</div>)}</div>)}</>}</nav>}
-function ChannelLink({guild,channel,nested,onNavigate}:{guild:string;channel:{id:string;name:string;has_link:boolean;is_thread:boolean};nested?:boolean;onNavigate?:()=>void}){if(!channel.has_link)return <div className="truncate px-2 py-1.5 text-sm text-muted-foreground">{channel.name}</div>;return <Link onClick={onNavigate} to={`/guilds/${guild}/messages?channel=${channel.id}`} className={`flex items-center gap-2 rounded-md py-1.5 pr-2 text-sm hover:bg-muted ${nested?"pl-7":"pl-2"}`}><Hash size={14}/><span className="truncate">{channel.name}</span>{channel.is_thread&&<Badge>thread</Badge>}</Link>}
-function Shell(){return <div className="min-h-screen lg:grid lg:grid-cols-[280px_1fr]"><aside className="sticky top-0 hidden h-screen overflow-y-auto border-r p-4 lg:block"><NavContent/></aside><main className="min-w-0"><Outlet/></main></div>}
-function Guilds(){const navigate=useNavigate();const query=useQuery({queryKey:["guilds"],queryFn:({signal})=>api.guilds(signal)});useEffect(()=>{if(query.data?.guilds.length===1)navigate(`/guilds/${query.data.guilds[0]}`,{replace:true})},[query.data,navigate]);return <><Header title="ギルド"/><div className="mx-auto max-w-4xl p-4 sm:p-8">{query.isLoading?<Skeleton className="h-32"/>:query.isError?<ErrorState retry={()=>query.refetch()}/>:query.data!.guilds.length===0?<Empty>ギルドがありません。</Empty>:<div className="grid gap-4 sm:grid-cols-2">{query.data!.guilds.map(g=><Link key={g} to={`/guilds/${g}`}><Card className="p-5 transition hover:border-primary"><p className="font-semibold">{g}</p><p className="mt-1 text-sm text-muted-foreground">アーカイブを開く</p></Card></Link>)}</div>}</div></>}
-function GuildHome(){const{guildId=""}=useParams();const query=useQuery({queryKey:["navigation",guildId],queryFn:({signal})=>api.navigation(guildId,signal)});return <><Header title={guildId}/><div className="mx-auto max-w-5xl space-y-6 p-4 sm:p-8"><div className="grid gap-3 sm:grid-cols-3"><Link to={`/guilds/${guildId}/messages`}><Card className="p-4 hover:border-primary"><MessageSquare className="mb-3"/>全メッセージ</Card></Link><Link to={`/guilds/${guildId}/media/images`}><Card className="p-4 hover:border-primary"><Image className="mb-3"/>メディア</Card></Link><Link to="/search"><Card className="p-4 hover:border-primary"><Search className="mb-3"/>横断検索</Card></Link></div>{query.isLoading?<Skeleton className="h-56"/>:query.isError?<ErrorState retry={()=>query.refetch()}/>:query.data?.groups.map(group=><section key={group.id||group.name}><h2 className="mb-2 text-sm font-semibold text-muted-foreground">{group.name}</h2><Card className="divide-y">{group.items.map(channel=><div key={channel.id} className="p-3"><ChannelLink guild={guildId} channel={channel}/>{channel.threads?.map(t=><ChannelLink key={t.id} guild={guildId} channel={t} nested/>)}</div>)}</Card></section>)}</div></>}
+function ThemeButton() {
+  const [dark, setDark] = useState(() => document.documentElement.classList.contains("dark"));
+  return (
+    <Button
+      aria-label="テーマを切り替え"
+      onClick={() => {
+        const next = !dark;
+        setDark(next);
+        document.documentElement.classList.toggle("dark", next);
+        localStorage.setItem("theme", next ? "dark" : "light");
+      }}
+    >
+      {dark ? <Sun size={16} /> : <Moon size={16} />}
+    </Button>
+  );
+}
+function Header({ title }: { title: string }) {
+  return (
+    <header className="sticky top-0 z-20 flex h-16 items-center gap-3 border-b bg-background/90 px-4 backdrop-blur">
+      <MobileNav />
+      <h1 className="min-w-0 flex-1 truncate text-lg font-semibold">{title}</h1>
+      <Button onClick={() => location.assign("/search")}>
+        <Search size={16} />
+        <span className="hidden sm:inline">検索</span>
+      </Button>
+      <ThemeButton />
+    </header>
+  );
+}
+function MobileNav() {
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <Button className="lg:hidden" aria-label="ナビゲーション" onClick={() => setOpen(true)}>
+        <Menu size={18} />
+      </Button>
+      {open && (
+        <div className="fixed inset-0 z-50 bg-black/50 lg:hidden" onClick={() => setOpen(false)}>
+          <aside
+            className="h-full w-[85vw] max-w-sm bg-background p-3"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="mb-3 flex justify-end">
+              <Button onClick={() => setOpen(false)}>
+                <X size={18} />
+              </Button>
+            </div>
+            <NavContent onNavigate={() => setOpen(false)} />
+          </aside>
+        </div>
+      )}
+    </>
+  );
+}
+function NavContent({ onNavigate }: { onNavigate?: () => void }) {
+  const { guildId } = useParams();
+  const guilds = useQuery({
+    queryKey: ["guilds"],
+    queryFn: ({ signal }) => api.guilds(signal),
+  });
+  const navigation = useQuery({
+    queryKey: ["navigation", guildId],
+    queryFn: ({ signal }) => api.navigation(guildId!, signal),
+    enabled: !!guildId,
+  });
+  return (
+    <nav className="space-y-5">
+      <Link
+        to="/guilds"
+        onClick={onNavigate}
+        className="flex items-center gap-2 px-2 text-lg font-bold"
+      >
+        <Archive size={20} />
+        Archive
+      </Link>
+      <div className="space-y-1">
+        {guilds.data?.guilds.map((g) => (
+          <Link
+            key={g}
+            onClick={onNavigate}
+            to={`/guilds/${g}`}
+            className={`block truncate rounded-md px-2 py-1.5 text-sm ${g === guildId ? "bg-primary text-primary-foreground" : "hover:bg-muted"}`}
+          >
+            {g}
+          </Link>
+        ))}
+      </div>
+      {guildId && (
+        <>
+          <Link
+            onClick={onNavigate}
+            to={`/guilds/${guildId}/messages`}
+            className="flex items-center gap-2 rounded-md px-2 py-2 text-sm hover:bg-muted"
+          >
+            <MessageSquare size={16} />
+            全チャンネル
+          </Link>
+          {navigation.data?.groups.map((group) => (
+            <div key={group.id || group.name}>
+              <p className="mb-1 px-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                {group.name}
+              </p>
+              {group.items.map((channel) => (
+                <div key={channel.id}>
+                  <ChannelLink guild={guildId} channel={channel} onNavigate={onNavigate} />
+                  {channel.threads?.map((thread) => (
+                    <ChannelLink
+                      key={thread.id}
+                      guild={guildId}
+                      channel={thread}
+                      nested
+                      onNavigate={onNavigate}
+                    />
+                  ))}
+                </div>
+              ))}
+            </div>
+          ))}
+        </>
+      )}
+    </nav>
+  );
+}
+function ChannelLink({
+  guild,
+  channel,
+  nested,
+  onNavigate,
+}: {
+  guild: string;
+  channel: { id: string; name: string; has_link: boolean; is_thread: boolean };
+  nested?: boolean;
+  onNavigate?: () => void;
+}) {
+  if (!channel.has_link)
+    return <div className="truncate px-2 py-1.5 text-sm text-muted-foreground">{channel.name}</div>;
+  return (
+    <Link
+      onClick={onNavigate}
+      to={`/guilds/${guild}/messages?channel=${channel.id}`}
+      className={`flex items-center gap-2 rounded-md py-1.5 pr-2 text-sm hover:bg-muted ${nested ? "pl-7" : "pl-2"}`}
+    >
+      <Hash size={14} />
+      <span className="truncate">{channel.name}</span>
+      {channel.is_thread && <Badge>thread</Badge>}
+    </Link>
+  );
+}
+function Shell() {
+  return (
+    <div className="min-h-screen lg:grid lg:grid-cols-[280px_1fr]">
+      <aside className="sticky top-0 hidden h-screen overflow-y-auto border-r p-4 lg:block">
+        <NavContent />
+      </aside>
+      <main className="min-w-0">
+        <Outlet />
+      </main>
+    </div>
+  );
+}
+function Guilds() {
+  const navigate = useNavigate();
+  const query = useQuery({
+    queryKey: ["guilds"],
+    queryFn: ({ signal }) => api.guilds(signal),
+  });
+  useEffect(() => {
+    if (query.data?.guilds.length === 1)
+      navigate(`/guilds/${query.data.guilds[0]}`, { replace: true });
+  }, [query.data, navigate]);
+  return (
+    <>
+      <Header title="ギルド" />
+      <div className="mx-auto max-w-4xl p-4 sm:p-8">
+        {query.isLoading ? (
+          <Skeleton className="h-32" />
+        ) : query.isError ? (
+          <ErrorState retry={() => query.refetch()} />
+        ) : query.data!.guilds.length === 0 ? (
+          <Empty>ギルドがありません。</Empty>
+        ) : (
+          <div className="grid gap-4 sm:grid-cols-2">
+            {query.data!.guilds.map((g) => (
+              <Link key={g} to={`/guilds/${g}`}>
+                <Card className="p-5 transition hover:border-primary">
+                  <p className="font-semibold">{g}</p>
+                  <p className="mt-1 text-sm text-muted-foreground">アーカイブを開く</p>
+                </Card>
+              </Link>
+            ))}
+          </div>
+        )}
+      </div>
+    </>
+  );
+}
+function GuildHome() {
+  const { guildId = "" } = useParams();
+  const query = useQuery({
+    queryKey: ["navigation", guildId],
+    queryFn: ({ signal }) => api.navigation(guildId, signal),
+  });
+  return (
+    <>
+      <Header title={guildId} />
+      <div className="mx-auto max-w-5xl space-y-6 p-4 sm:p-8">
+        <div className="grid gap-3 sm:grid-cols-3">
+          <Link to={`/guilds/${guildId}/messages`}>
+            <Card className="p-4 hover:border-primary">
+              <MessageSquare className="mb-3" />
+              全メッセージ
+            </Card>
+          </Link>
+          <Link to={`/guilds/${guildId}/media/images`}>
+            <Card className="p-4 hover:border-primary">
+              <Image className="mb-3" />
+              メディア
+            </Card>
+          </Link>
+          <Link to="/search">
+            <Card className="p-4 hover:border-primary">
+              <Search className="mb-3" />
+              横断検索
+            </Card>
+          </Link>
+        </div>
+        {query.isLoading ? (
+          <Skeleton className="h-56" />
+        ) : query.isError ? (
+          <ErrorState retry={() => query.refetch()} />
+        ) : (
+          query.data?.groups.map((group) => (
+            <section key={group.id || group.name}>
+              <h2 className="mb-2 text-sm font-semibold text-muted-foreground">{group.name}</h2>
+              <Card className="divide-y">
+                {group.items.map((channel) => (
+                  <div key={channel.id} className="p-3">
+                    <ChannelLink guild={guildId} channel={channel} />
+                    {channel.threads?.map((t) => (
+                      <ChannelLink key={t.id} guild={guildId} channel={t} nested />
+                    ))}
+                  </div>
+                ))}
+              </Card>
+            </section>
+          ))
+        )}
+      </div>
+    </>
+  );
+}
 
-function useSentinel(load:()=>void,enabled:boolean){const ref=useRef<HTMLDivElement>(null);useEffect(()=>{const node=ref.current;if(!node||!enabled)return;const observer=new IntersectionObserver(entries=>{if(entries.some(e=>e.isIntersecting))load()},{rootMargin:"300px"});observer.observe(node);return()=>observer.disconnect()},[load,enabled]);return ref}
-async function waitForMedia(node:HTMLElement){const images=[...node.querySelectorAll("img")];const videos=[...node.querySelectorAll("video")];images.forEach(image=>image.loading="eager");await Promise.all([...images.map(image=>image.complete?Promise.resolve():new Promise<void>(resolve=>{image.addEventListener("load",()=>resolve(),{once:true});image.addEventListener("error",()=>resolve(),{once:true})})),...videos.map(video=>video.readyState>=1?Promise.resolve():new Promise<void>(resolve=>{video.addEventListener("loadedmetadata",()=>resolve(),{once:true});video.addEventListener("error",()=>resolve(),{once:true})}))]);await new Promise<void>(resolve=>requestAnimationFrame(()=>requestAnimationFrame(()=>resolve())))}
-function RenderingOverlay(){return <div className="fixed inset-0 z-[100] grid cursor-wait place-items-center bg-background/80 backdrop-blur-sm" role="status" aria-live="polite"><div className="flex flex-col items-center gap-3"><span className="size-9 animate-spin rounded-full border-4 border-muted border-t-primary"/><span className="text-sm text-muted-foreground">表示を準備中…</span></div></div>}
-const mediaTabs=[{kind:"images",label:"画像",icon:Image},{kind:"videos",label:"動画",icon:Video},{kind:"audio",label:"音声",icon:Mic2},{kind:"files",label:"ファイル",icon:File},{kind:"embeds",label:"埋め込み",icon:PanelLeftClose}];
-function ViewTabs({guild,channel,active}:{guild:string;channel:string;active:string}){const q=channel?`?channel=${channel}`:"";return <div className="flex gap-1 overflow-x-auto border-b px-4"> <Link to={`/guilds/${guild}/messages${q}`} className={`whitespace-nowrap border-b-2 px-3 py-3 text-sm ${active==="messages"?"border-primary text-primary":"border-transparent text-muted-foreground"}`}>メッセージ</Link>{mediaTabs.map(t=><Link key={t.kind} to={`/guilds/${guild}/media/${t.kind}${q}`} className={`whitespace-nowrap border-b-2 px-3 py-3 text-sm ${active===t.kind?"border-primary text-primary":"border-transparent text-muted-foreground"}`}>{t.label}</Link>)}</div>}
-function InfiniteStatus({loading,more,error,retry}:{loading:boolean;more:boolean;error:boolean;retry:()=>void}){return <div className="p-5 text-center text-sm text-muted-foreground">{error?<Button onClick={retry}>読み込みに失敗しました。再試行</Button>:loading?"読み込み中…":more?"スクロールして続きを読み込む":"これより古い項目はありません。"}</div>}
-function Messages(){const{guildId=""}=useParams();const[params]=useSearchParams();const channel=params.get("channel")||"";const[rendering,setRendering]=useState(true);const content=useRef<HTMLDivElement>(null);const query=useInfiniteQuery({queryKey:["messages",guildId,channel],initialPageParam:"",queryFn:({pageParam,signal})=>api.messages(guildId,channel,pageParam,signal),getNextPageParam:p=>p.has_more?p.next_cursor:undefined});const scroll=useRef({key:"",initialized:false,height:0});const key=`${guildId}:${channel}`;if(scroll.current.key!==key)scroll.current={key,initialized:false,height:0};const loadOlder=()=>{scroll.current.height=document.documentElement.scrollHeight;query.fetchNextPage()};const sentinel=useSentinel(loadOlder,!!query.hasNextPage&&!query.isFetchingNextPage&&!rendering);const pageCount=query.data?.pages.length??0;useLayoutEffect(()=>{setRendering(true)},[key]);useLayoutEffect(()=>{const node=content.current;if(!pageCount||!node)return;if(scroll.current.initialized){if(scroll.current.height){const addedHeight=document.documentElement.scrollHeight-scroll.current.height;window.scrollBy(0,addedHeight);scroll.current.height=0}return}let cancelled=false;waitForMedia(node).then(()=>{if(cancelled)return;scroll.current.initialized=true;window.scrollTo(0,document.documentElement.scrollHeight);setRendering(false)});return()=>{cancelled=true}},[key,pageCount]);useEffect(()=>{if(query.isError||query.isFetchNextPageError)setRendering(false)},[query.isError,query.isFetchNextPageError]);const sections=query.data?chronologicalSections(query.data.pages):[];return <>{rendering&&<RenderingOverlay/>}<Header title={channel?`# ${channel}`:"全チャンネル"}/><ViewTabs guild={guildId} channel={channel} active="messages"/><div ref={content} className="mx-auto max-w-4xl p-3 sm:p-6">{query.data&&<InfiniteStatus loading={query.isFetchingNextPage} more={!!query.hasNextPage} error={query.isFetchNextPageError} retry={loadOlder}/>}<div ref={sentinel}/>{query.isLoading?<MessageSkeleton/>:query.isError?<ErrorState retry={()=>query.refetch()}/>:sections.length===0?<Empty>アーカイブされたメッセージがありません。</Empty>:<MessageSections sections={sections}/>}</div></>}
-function MessageSkeleton(){return <div className="space-y-5">{[1,2,3].map(i=><div key={i} className="flex gap-3"><Skeleton className="size-10 rounded-full"/><div className="flex-1 space-y-2"><Skeleton className="h-4 w-40"/><Skeleton className="h-16"/></div></div>)}</div>}
-function MessageSections({sections}:{sections:Section[]}){return <div className="space-y-7">{sections.map((section,index)=><section key={`${section.date}-${index}`}><div className="sticky top-16 z-10 mb-3 flex items-center gap-3"><span className="h-px flex-1 bg-border"/><Badge className="bg-background">{section.date}</Badge><span className="h-px flex-1 bg-border"/></div><div className="space-y-1">{section.messages.map((m,i)=><MessageRow key={`${m.timestamp}-${m.author_id}-${i}`} message={m}/>)}</div></section>)}</div>}
-function MessageRow({message:m}:{message:Message}){return <article className="group flex gap-3 rounded-lg px-2 py-2 hover:bg-muted/50"><div className="mt-1 size-10 shrink-0 overflow-hidden rounded-full bg-primary text-center leading-10 text-primary-foreground">{m.avatar_url?<img className="size-full object-cover" src={m.avatar_url} alt="" onError={e=>e.currentTarget.style.display="none"}/>:m.author_name.trim().charAt(0).toUpperCase()||"?"}</div><div className="min-w-0 flex-1">{m.reply_snippet&&<p className="mb-1 truncate border-l-2 pl-2 text-xs text-muted-foreground">{m.reply_snippet}</p>}<div className="flex flex-wrap items-baseline gap-x-2"><strong className="text-sm">{m.author_name}</strong><time className="text-xs text-muted-foreground">{m.timestamp}</time>{m.channel_name&&<Link className="text-xs text-primary" to={`?channel=${m.channel_id}`}>#{m.channel_name}</Link>}{m.edited&&<span className="text-xs text-muted-foreground">編集済み</span>}</div>{m.content_html&&<div className="content mt-1 text-[15px]" dangerouslySetInnerHTML={{__html:m.content_html}}/>}<Attachments items={m.attachments}/>{m.embeds.map((e,i)=><EmbedCard key={i} embed={e}/>) }{m.reactions.length>0&&<div className="mt-2 flex flex-wrap gap-1">{m.reactions.map((r,i)=><Badge key={i}>{r.emoji} {r.count}</Badge>)}</div>}</div></article>}
-function Attachments({items}:{items:Attachment[]}){return <div className="mt-2 grid max-w-2xl gap-2">{items.map((a,i)=>!a.available?<Card key={i} className="border-destructive/40 p-3 text-sm text-destructive">asset archive not found: {a.filename}</Card>:a.is_image?<a key={i} href={a.url} target="_blank" rel="noreferrer"><img className="max-h-[520px] max-w-full rounded-lg object-contain" src={a.url} alt={a.filename} width={a.width} height={a.height} loading="lazy"/></a>:a.is_video?<video key={i} className="max-h-[520px] max-w-full rounded-lg" src={a.url} controls preload="metadata"/>:a.is_audio?<audio key={i} className="w-full" src={a.url} controls/>:<a key={i} href={a.url} target="_blank" rel="noreferrer"><Card className="flex items-center gap-3 p-3"><File/><span className="min-w-0 flex-1 truncate">{a.filename}</span><span className="text-xs text-muted-foreground">{formatBytes(a.size)}</span></Card></a>)}</div>}
-function EmbedCard({embed:e}:{embed:Embed}){return <Card className="mt-2 max-w-2xl overflow-hidden border-l-4 p-3" style={{borderLeftColor:e.color}}>{e.title&&(e.url?<a className="font-semibold text-primary" href={e.url} target="_blank" rel="noreferrer">{e.title}</a>:<p className="font-semibold">{e.title}</p>)}{e.description&&<p className="mt-1 whitespace-pre-wrap text-sm text-muted-foreground">{e.description}</p>}{e.image_url&&<img className="mt-3 max-h-96 max-w-full rounded-md object-contain" src={e.image_url} alt="" loading="lazy"/>}</Card>}
+function useSentinel(load: () => void, enabled: boolean) {
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const node = ref.current;
+    if (!node || !enabled) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((e) => e.isIntersecting)) load();
+      },
+      { rootMargin: "300px" },
+    );
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [load, enabled]);
+  return ref;
+}
+async function waitForMedia(node: HTMLElement) {
+  const images = [...node.querySelectorAll("img")];
+  const videos = [...node.querySelectorAll("video")];
+  images.forEach((image) => (image.loading = "eager"));
+  await Promise.all([
+    ...images.map((image) =>
+      image.complete
+        ? Promise.resolve()
+        : new Promise<void>((resolve) => {
+            image.addEventListener("load", () => resolve(), { once: true });
+            image.addEventListener("error", () => resolve(), { once: true });
+          }),
+    ),
+    ...videos.map((video) =>
+      video.readyState >= 1
+        ? Promise.resolve()
+        : new Promise<void>((resolve) => {
+            video.addEventListener("loadedmetadata", () => resolve(), {
+              once: true,
+            });
+            video.addEventListener("error", () => resolve(), { once: true });
+          }),
+    ),
+  ]);
+  await new Promise<void>((resolve) =>
+    requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+  );
+}
+function RenderingOverlay() {
+  return (
+    <div
+      className="fixed inset-0 z-[100] grid cursor-wait place-items-center bg-background/80 backdrop-blur-sm"
+      role="status"
+      aria-live="polite"
+    >
+      <div className="flex flex-col items-center gap-3">
+        <span className="size-9 animate-spin rounded-full border-4 border-muted border-t-primary" />
+        <span className="text-sm text-muted-foreground">表示を準備中…</span>
+      </div>
+    </div>
+  );
+}
+const mediaTabs = [
+  { kind: "images", label: "画像", icon: Image },
+  { kind: "videos", label: "動画", icon: Video },
+  { kind: "audio", label: "音声", icon: Mic2 },
+  { kind: "files", label: "ファイル", icon: File },
+  { kind: "embeds", label: "埋め込み", icon: PanelLeftClose },
+];
+function ViewTabs({ guild, channel, active }: { guild: string; channel: string; active: string }) {
+  const q = channel ? `?channel=${channel}` : "";
+  return (
+    <div className="flex gap-1 overflow-x-auto border-b px-4">
+      {" "}
+      <Link
+        to={`/guilds/${guild}/messages${q}`}
+        className={`whitespace-nowrap border-b-2 px-3 py-3 text-sm ${active === "messages" ? "border-primary text-primary" : "border-transparent text-muted-foreground"}`}
+      >
+        メッセージ
+      </Link>
+      {mediaTabs.map((t) => (
+        <Link
+          key={t.kind}
+          to={`/guilds/${guild}/media/${t.kind}${q}`}
+          className={`whitespace-nowrap border-b-2 px-3 py-3 text-sm ${active === t.kind ? "border-primary text-primary" : "border-transparent text-muted-foreground"}`}
+        >
+          {t.label}
+        </Link>
+      ))}
+    </div>
+  );
+}
+function InfiniteStatus({
+  loading,
+  more,
+  error,
+  retry,
+}: {
+  loading: boolean;
+  more: boolean;
+  error: boolean;
+  retry: () => void;
+}) {
+  return (
+    <div className="p-5 text-center text-sm text-muted-foreground">
+      {error ? (
+        <Button onClick={retry}>読み込みに失敗しました。再試行</Button>
+      ) : loading ? (
+        "読み込み中…"
+      ) : more ? (
+        "スクロールして続きを読み込む"
+      ) : (
+        "これより古い項目はありません。"
+      )}
+    </div>
+  );
+}
+function Messages() {
+  const { guildId = "" } = useParams();
+  const [params] = useSearchParams();
+  const channel = params.get("channel") || "";
+  const [rendering, setRendering] = useState(true);
+  const content = useRef<HTMLDivElement>(null);
+  const query = useInfiniteQuery({
+    queryKey: ["messages", guildId, channel],
+    initialPageParam: "",
+    queryFn: ({ pageParam, signal }) => api.messages(guildId, channel, pageParam, signal),
+    getNextPageParam: (p) => (p.has_more ? p.next_cursor : undefined),
+  });
+  const scroll = useRef({ key: "", initialized: false, height: 0 });
+  const key = `${guildId}:${channel}`;
+  if (scroll.current.key !== key) scroll.current = { key, initialized: false, height: 0 };
+  const loadOlder = () => {
+    scroll.current.height = document.documentElement.scrollHeight;
+    query.fetchNextPage();
+  };
+  const sentinel = useSentinel(
+    loadOlder,
+    !!query.hasNextPage && !query.isFetchingNextPage && !rendering,
+  );
+  const pageCount = query.data?.pages.length ?? 0;
+  useLayoutEffect(() => {
+    setRendering(true);
+  }, [key]);
+  useLayoutEffect(() => {
+    const node = content.current;
+    if (!pageCount || !node) return;
+    if (scroll.current.initialized) {
+      if (scroll.current.height) {
+        const addedHeight = document.documentElement.scrollHeight - scroll.current.height;
+        window.scrollBy(0, addedHeight);
+        scroll.current.height = 0;
+      }
+      return;
+    }
+    let cancelled = false;
+    waitForMedia(node).then(() => {
+      if (cancelled) return;
+      scroll.current.initialized = true;
+      window.scrollTo(0, document.documentElement.scrollHeight);
+      setRendering(false);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [key, pageCount]);
+  useEffect(() => {
+    if (query.isError || query.isFetchNextPageError) setRendering(false);
+  }, [query.isError, query.isFetchNextPageError]);
+  const sections = query.data ? chronologicalSections(query.data.pages) : [];
+  return (
+    <>
+      {rendering && <RenderingOverlay />}
+      <Header title={channel ? `# ${channel}` : "全チャンネル"} />
+      <ViewTabs guild={guildId} channel={channel} active="messages" />
+      <div ref={content} className="mx-auto max-w-4xl p-3 sm:p-6">
+        {query.data && (
+          <InfiniteStatus
+            loading={query.isFetchingNextPage}
+            more={!!query.hasNextPage}
+            error={query.isFetchNextPageError}
+            retry={loadOlder}
+          />
+        )}
+        <div ref={sentinel} />
+        {query.isLoading ? (
+          <MessageSkeleton />
+        ) : query.isError ? (
+          <ErrorState retry={() => query.refetch()} />
+        ) : sections.length === 0 ? (
+          <Empty>アーカイブされたメッセージがありません。</Empty>
+        ) : (
+          <MessageSections sections={sections} />
+        )}
+      </div>
+    </>
+  );
+}
+function MessageSkeleton() {
+  return (
+    <div className="space-y-5">
+      {[1, 2, 3].map((i) => (
+        <div key={i} className="flex gap-3">
+          <Skeleton className="size-10 rounded-full" />
+          <div className="flex-1 space-y-2">
+            <Skeleton className="h-4 w-40" />
+            <Skeleton className="h-16" />
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+function MessageSections({ sections }: { sections: Section[] }) {
+  return (
+    <div className="space-y-7">
+      {sections.map((section, index) => (
+        <section key={`${section.date}-${index}`}>
+          <div className="sticky top-16 z-10 mb-3 flex items-center gap-3">
+            <span className="h-px flex-1 bg-border" />
+            <Badge className="bg-background">{section.date}</Badge>
+            <span className="h-px flex-1 bg-border" />
+          </div>
+          <div className="space-y-1">
+            {section.messages.map((m, i) => (
+              <MessageRow key={`${m.timestamp}-${m.author_id}-${i}`} message={m} />
+            ))}
+          </div>
+        </section>
+      ))}
+    </div>
+  );
+}
+function MessageRow({ message: m }: { message: Message }) {
+  return (
+    <article className="group flex gap-3 rounded-lg px-2 py-2 hover:bg-muted/50">
+      <div className="mt-1 size-10 shrink-0 overflow-hidden rounded-full bg-primary text-center leading-10 text-primary-foreground">
+        {m.avatar_url ? (
+          <img
+            className="size-full object-cover"
+            src={m.avatar_url}
+            alt=""
+            onError={(e) => (e.currentTarget.style.display = "none")}
+          />
+        ) : (
+          m.author_name.trim().charAt(0).toUpperCase() || "?"
+        )}
+      </div>
+      <div className="min-w-0 flex-1">
+        {m.reply_snippet && (
+          <p className="mb-1 truncate border-l-2 pl-2 text-xs text-muted-foreground">
+            {m.reply_snippet}
+          </p>
+        )}
+        <div className="flex flex-wrap items-baseline gap-x-2">
+          <strong className="text-sm">{m.author_name}</strong>
+          <time className="text-xs text-muted-foreground">{m.timestamp}</time>
+          {m.channel_name && (
+            <Link className="text-xs text-primary" to={`?channel=${m.channel_id}`}>
+              #{m.channel_name}
+            </Link>
+          )}
+          {m.edited && <span className="text-xs text-muted-foreground">編集済み</span>}
+        </div>
+        {m.content_html && (
+          <div
+            className="content mt-1 text-[15px]"
+            dangerouslySetInnerHTML={{ __html: m.content_html }}
+          />
+        )}
+        <Attachments items={m.attachments} />
+        {m.embeds.map((e, i) => (
+          <EmbedCard key={i} embed={e} />
+        ))}
+        {m.reactions.length > 0 && (
+          <div className="mt-2 flex flex-wrap gap-1">
+            {m.reactions.map((r, i) => (
+              <Badge key={i}>
+                {r.emoji} {r.count}
+              </Badge>
+            ))}
+          </div>
+        )}
+      </div>
+    </article>
+  );
+}
+function Attachments({ items }: { items: Attachment[] }) {
+  return (
+    <div className="mt-2 grid max-w-2xl gap-2">
+      {items.map((a, i) =>
+        !a.available ? (
+          <Card key={i} className="border-destructive/40 p-3 text-sm text-destructive">
+            asset archive not found: {a.filename}
+          </Card>
+        ) : a.is_image ? (
+          <a key={i} href={a.url} target="_blank" rel="noreferrer">
+            <img
+              className="max-h-[520px] max-w-full rounded-lg object-contain"
+              src={a.url}
+              alt={a.filename}
+              width={a.width}
+              height={a.height}
+              loading="lazy"
+            />
+          </a>
+        ) : a.is_video ? (
+          <video
+            key={i}
+            className="max-h-[520px] max-w-full rounded-lg"
+            src={a.url}
+            controls
+            preload="metadata"
+          />
+        ) : a.is_audio ? (
+          <audio key={i} className="w-full" src={a.url} controls />
+        ) : (
+          <a key={i} href={a.url} target="_blank" rel="noreferrer">
+            <Card className="flex items-center gap-3 p-3">
+              <File />
+              <span className="min-w-0 flex-1 truncate">{a.filename}</span>
+              <span className="text-xs text-muted-foreground">{formatBytes(a.size)}</span>
+            </Card>
+          </a>
+        ),
+      )}
+    </div>
+  );
+}
+function EmbedCard({ embed: e }: { embed: Embed }) {
+  return (
+    <Card
+      className="mt-2 max-w-2xl overflow-hidden border-l-4 p-3"
+      style={{ borderLeftColor: e.color }}
+    >
+      {e.title &&
+        (e.url ? (
+          <a className="font-semibold text-primary" href={e.url} target="_blank" rel="noreferrer">
+            {e.title}
+          </a>
+        ) : (
+          <p className="font-semibold">{e.title}</p>
+        ))}
+      {e.description && (
+        <p className="mt-1 whitespace-pre-wrap text-sm text-muted-foreground">{e.description}</p>
+      )}
+      {e.image_url && (
+        <img
+          className="mt-3 max-h-96 max-w-full rounded-md object-contain"
+          src={e.image_url}
+          alt=""
+          loading="lazy"
+        />
+      )}
+    </Card>
+  );
+}
 
-function Media(){const{guildId="",kind="images"}=useParams();const[params]=useSearchParams();const channel=params.get("channel")||"";const valid=mediaTabs.some(t=>t.kind===kind);const query=useInfiniteQuery({queryKey:["media",guildId,kind,channel],initialPageParam:"",queryFn:({pageParam,signal})=>api.media(guildId,kind,channel,pageParam,signal),getNextPageParam:p=>p.has_more?p.next_cursor:undefined,enabled:valid});const sentinel=useSentinel(()=>query.fetchNextPage(),!!query.hasNextPage&&!query.isFetchingNextPage);if(!valid)return <Navigate to={`/guilds/${guildId}/media/images`} replace/>;const items=query.data?.pages.flatMap(p=>p.items)??[];return <><Header title={mediaTabs.find(t=>t.kind===kind)?.label||"メディア"}/><ViewTabs guild={guildId} channel={channel} active={kind}/><div className="p-4 sm:p-6">{query.isLoading?<div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3"><Skeleton className="h-72"/><Skeleton className="h-72"/></div>:query.isError?<ErrorState retry={()=>query.refetch()}/>:items.length===0?<Empty>アーカイブされた項目がありません。</Empty>:<div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">{items.map((item,i)=><MediaCard key={i} item={item}/>)}</div>}<div ref={sentinel}/>{query.data&&<InfiniteStatus loading={query.isFetchingNextPage} more={!!query.hasNextPage} error={query.isFetchNextPageError} retry={()=>query.fetchNextPage()}/>}</div></>}
-function MediaCard({item}:{item:MediaItem}){return <Card className="overflow-hidden">{item.attachment?<div className="flex min-h-52 items-center justify-center bg-muted"><Attachments items={[item.attachment]}/></div>:item.embed?<div className="p-3"><EmbedCard embed={item.embed}/></div>:null}<div className="border-t p-3 text-xs text-muted-foreground"><strong className="text-foreground">{item.author_name}</strong> · {item.timestamp}{item.channel_name&&<> · #{item.channel_name}</>}</div></Card>}
+function Media() {
+  const { guildId = "", kind = "images" } = useParams();
+  const [params] = useSearchParams();
+  const channel = params.get("channel") || "";
+  const valid = mediaTabs.some((t) => t.kind === kind);
+  const query = useInfiniteQuery({
+    queryKey: ["media", guildId, kind, channel],
+    initialPageParam: "",
+    queryFn: ({ pageParam, signal }) => api.media(guildId, kind, channel, pageParam, signal),
+    getNextPageParam: (p) => (p.has_more ? p.next_cursor : undefined),
+    enabled: valid,
+  });
+  const sentinel = useSentinel(
+    () => query.fetchNextPage(),
+    !!query.hasNextPage && !query.isFetchingNextPage,
+  );
+  if (!valid) return <Navigate to={`/guilds/${guildId}/media/images`} replace />;
+  const items = query.data?.pages.flatMap((p) => p.items) ?? [];
+  return (
+    <>
+      <Header title={mediaTabs.find((t) => t.kind === kind)?.label || "メディア"} />
+      <ViewTabs guild={guildId} channel={channel} active={kind} />
+      <div className="p-4 sm:p-6">
+        {query.isLoading ? (
+          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+            <Skeleton className="h-72" />
+            <Skeleton className="h-72" />
+          </div>
+        ) : query.isError ? (
+          <ErrorState retry={() => query.refetch()} />
+        ) : items.length === 0 ? (
+          <Empty>アーカイブされた項目がありません。</Empty>
+        ) : (
+          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+            {items.map((item, i) => (
+              <MediaCard key={i} item={item} />
+            ))}
+          </div>
+        )}
+        <div ref={sentinel} />
+        {query.data && (
+          <InfiniteStatus
+            loading={query.isFetchingNextPage}
+            more={!!query.hasNextPage}
+            error={query.isFetchNextPageError}
+            retry={() => query.fetchNextPage()}
+          />
+        )}
+      </div>
+    </>
+  );
+}
+function MediaCard({ item }: { item: MediaItem }) {
+  return (
+    <Card className="overflow-hidden">
+      {item.attachment ? (
+        <div className="flex min-h-52 items-center justify-center bg-muted">
+          <Attachments items={[item.attachment]} />
+        </div>
+      ) : item.embed ? (
+        <div className="p-3">
+          <EmbedCard embed={item.embed} />
+        </div>
+      ) : null}
+      <div className="border-t p-3 text-xs text-muted-foreground">
+        <strong className="text-foreground">{item.author_name}</strong> · {item.timestamp}
+        {item.channel_name && <> · #{item.channel_name}</>}
+      </div>
+    </Card>
+  );
+}
 
-function SearchPage(){const[params,setParams]=useSearchParams();const options=useQuery({queryKey:["search-options"],queryFn:({signal})=>api.searchOptions(signal)});const queryString=params.toString();const results=useInfiniteQuery({queryKey:["search",queryString],initialPageParam:"",queryFn:({pageParam,signal})=>api.search(params,pageParam,signal),getNextPageParam:p=>p.has_more?p.next_cursor:undefined});const sentinel=useSentinel(()=>results.fetchNextPage(),!!results.hasNextPage&&!results.isFetchingNextPage);const update=(name:string,value:string)=>{const next=new URLSearchParams(params);value?next.set(name,value):next.delete(name);setParams(next)};const sections=results.data?.pages.flatMap(p=>p.items)??[];return <><Header title="アーカイブ検索"/><div className="mx-auto max-w-6xl p-4 sm:p-6"><Card className="mb-6 grid gap-3 p-4 md:grid-cols-3"><Field label="キーワード"><input value={params.get("q")||""} onChange={e=>update("q",e.target.value)} className="input" placeholder="本文、投稿者、添付…"/></Field><Field label="チャンネル / スレッド"><select value={params.get("channel")||""} onChange={e=>update("channel",e.target.value)} className="input"><option value="">すべて</option>{options.data?.channels.map(o=><option key={o.value} value={o.value}>{o.label}</option>)}</select></Field><Field label="投稿者"><select value={params.get("author")||""} onChange={e=>update("author",e.target.value)} className="input"><option value="">すべて</option>{options.data?.authors.map(o=><option key={o.value} value={o.value}>{o.label}</option>)}</select></Field><Field label="開始日時"><input type="datetime-local" value={params.get("from")||""} onChange={e=>update("from",e.target.value)} className="input"/></Field><Field label="終了日時"><input type="datetime-local" value={params.get("to")||""} onChange={e=>update("to",e.target.value)} className="input"/></Field><Field label="添付"><Select value={params.get("attachment")||""} change={v=>update("attachment",v)} options={[["","指定なし"],["yes","あり"],["no","なし"]]}/></Field><Field label="メディア"><Select value={params.get("media")||""} change={v=>update("media",v)} options={[["","指定なし"],["image","画像"],["video","動画"],["audio","音声"],["embed","埋め込み"]]}/></Field><Field label="埋め込み"><Select value={params.get("embed")||""} change={v=>update("embed",v)} options={[["","指定なし"],["yes","あり"],["no","なし"]]}/></Field><div className="flex items-end"><Button className="w-full" onClick={()=>setParams({})}>条件をクリア</Button></div></Card>{results.isLoading?<MessageSkeleton/>:results.isError?<ErrorState retry={()=>results.refetch()}/>:sections.length===0?<Empty>条件に一致するメッセージはありません。</Empty>:<MessageSections sections={sections}/>}<div ref={sentinel}/>{results.data&&<InfiniteStatus loading={results.isFetchingNextPage} more={!!results.hasNextPage} error={results.isFetchNextPageError} retry={()=>results.fetchNextPage()}/>}</div></>}
-function Field({label,children}:{label:string;children:React.ReactNode}){return <label className="grid gap-1 text-xs font-medium text-muted-foreground">{label}{children}</label>};function Select({value,change,options}:{value:string;change:(v:string)=>void;options:string[][]}){return <select className="input" value={value} onChange={e=>change(e.target.value)}>{options.map(o=><option key={o[0]} value={o[0]}>{o[1]}</option>)}</select>}
+function SearchPage() {
+  const [params, setParams] = useSearchParams();
+  const options = useQuery({
+    queryKey: ["search-options"],
+    queryFn: ({ signal }) => api.searchOptions(signal),
+  });
+  const queryString = params.toString();
+  const results = useInfiniteQuery({
+    queryKey: ["search", queryString],
+    initialPageParam: "",
+    queryFn: ({ pageParam, signal }) => api.search(params, pageParam, signal),
+    getNextPageParam: (p) => (p.has_more ? p.next_cursor : undefined),
+  });
+  const sentinel = useSentinel(
+    () => results.fetchNextPage(),
+    !!results.hasNextPage && !results.isFetchingNextPage,
+  );
+  const update = (name: string, value: string) => {
+    const next = new URLSearchParams(params);
+    value ? next.set(name, value) : next.delete(name);
+    setParams(next);
+  };
+  const sections = results.data?.pages.flatMap((p) => p.items) ?? [];
+  return (
+    <>
+      <Header title="アーカイブ検索" />
+      <div className="mx-auto max-w-6xl p-4 sm:p-6">
+        <Card className="mb-6 grid gap-3 p-4 md:grid-cols-3">
+          <Field label="キーワード">
+            <input
+              value={params.get("q") || ""}
+              onChange={(e) => update("q", e.target.value)}
+              className="input"
+              placeholder="本文、投稿者、添付…"
+            />
+          </Field>
+          <Field label="チャンネル / スレッド">
+            <select
+              value={params.get("channel") || ""}
+              onChange={(e) => update("channel", e.target.value)}
+              className="input"
+            >
+              <option value="">すべて</option>
+              {options.data?.channels.map((o) => (
+                <option key={o.value} value={o.value}>
+                  {o.label}
+                </option>
+              ))}
+            </select>
+          </Field>
+          <Field label="投稿者">
+            <select
+              value={params.get("author") || ""}
+              onChange={(e) => update("author", e.target.value)}
+              className="input"
+            >
+              <option value="">すべて</option>
+              {options.data?.authors.map((o) => (
+                <option key={o.value} value={o.value}>
+                  {o.label}
+                </option>
+              ))}
+            </select>
+          </Field>
+          <Field label="開始日時">
+            <input
+              type="datetime-local"
+              value={params.get("from") || ""}
+              onChange={(e) => update("from", e.target.value)}
+              className="input"
+            />
+          </Field>
+          <Field label="終了日時">
+            <input
+              type="datetime-local"
+              value={params.get("to") || ""}
+              onChange={(e) => update("to", e.target.value)}
+              className="input"
+            />
+          </Field>
+          <Field label="添付">
+            <Select
+              value={params.get("attachment") || ""}
+              change={(v) => update("attachment", v)}
+              options={[
+                ["", "指定なし"],
+                ["yes", "あり"],
+                ["no", "なし"],
+              ]}
+            />
+          </Field>
+          <Field label="メディア">
+            <Select
+              value={params.get("media") || ""}
+              change={(v) => update("media", v)}
+              options={[
+                ["", "指定なし"],
+                ["image", "画像"],
+                ["video", "動画"],
+                ["audio", "音声"],
+                ["embed", "埋め込み"],
+              ]}
+            />
+          </Field>
+          <Field label="埋め込み">
+            <Select
+              value={params.get("embed") || ""}
+              change={(v) => update("embed", v)}
+              options={[
+                ["", "指定なし"],
+                ["yes", "あり"],
+                ["no", "なし"],
+              ]}
+            />
+          </Field>
+          <div className="flex items-end">
+            <Button className="w-full" onClick={() => setParams({})}>
+              条件をクリア
+            </Button>
+          </div>
+        </Card>
+        {results.isLoading ? (
+          <MessageSkeleton />
+        ) : results.isError ? (
+          <ErrorState retry={() => results.refetch()} />
+        ) : sections.length === 0 ? (
+          <Empty>条件に一致するメッセージはありません。</Empty>
+        ) : (
+          <MessageSections sections={sections} />
+        )}
+        <div ref={sentinel} />
+        {results.data && (
+          <InfiniteStatus
+            loading={results.isFetchingNextPage}
+            more={!!results.hasNextPage}
+            error={results.isFetchNextPageError}
+            retry={() => results.fetchNextPage()}
+          />
+        )}
+      </div>
+    </>
+  );
+}
+function Field({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <label className="grid gap-1 text-xs font-medium text-muted-foreground">
+      {label}
+      {children}
+    </label>
+  );
+}
+function Select({
+  value,
+  change,
+  options,
+}: {
+  value: string;
+  change: (v: string) => void;
+  options: string[][];
+}) {
+  return (
+    <select className="input" value={value} onChange={(e) => change(e.target.value)}>
+      {options.map((o) => (
+        <option key={o[0]} value={o[0]}>
+          {o[1]}
+        </option>
+      ))}
+    </select>
+  );
+}
 
-export default function App(){return <Routes><Route element={<Shell/>}><Route path="/" element={<Navigate to="/guilds" replace/>}/><Route path="/guilds" element={<Guilds/>}/><Route path="/guilds/:guildId" element={<GuildHome/>}/><Route path="/guilds/:guildId/messages" element={<Messages/>}/><Route path="/guilds/:guildId/media/:kind" element={<Media/>}/><Route path="/search" element={<SearchPage/>}/><Route path="*" element={<Navigate to="/guilds" replace/>}/></Route></Routes>}
+export default function App() {
+  return (
+    <Routes>
+      <Route element={<Shell />}>
+        <Route path="/" element={<Navigate to="/guilds" replace />} />
+        <Route path="/guilds" element={<Guilds />} />
+        <Route path="/guilds/:guildId" element={<GuildHome />} />
+        <Route path="/guilds/:guildId/messages" element={<Messages />} />
+        <Route path="/guilds/:guildId/media/:kind" element={<Media />} />
+        <Route path="/search" element={<SearchPage />} />
+        <Route path="*" element={<Navigate to="/guilds" replace />} />
+      </Route>
+    </Routes>
+  );
+}

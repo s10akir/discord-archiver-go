@@ -12,10 +12,21 @@ describe("formatBytes", () => {
 
 describe("chronologicalSections", () => {
   const message = (timestamp: string): Message => ({
-    author_id: "1", author_name: "user", timestamp, edited: false,
-    attachments: [], embeds: [], reactions: [], channel_id: "1", channel_name: "general",
+    author_id: "1",
+    author_name: "user",
+    timestamp,
+    edited: false,
+    attachments: [],
+    embeds: [],
+    reactions: [],
+    channel_id: "1",
+    channel_name: "general",
   });
-  const page = (items: Section[]): Page<Section> => ({ items, next_cursor: "", has_more: false });
+  const page = (items: Section[]): Page<Section> => ({
+    items,
+    next_cursor: "",
+    has_more: false,
+  });
 
   it("prepends older pages and merges a date split across pages", () => {
     const result = chronologicalSections([
@@ -26,7 +37,7 @@ describe("chronologicalSections", () => {
       ]),
     ]);
 
-    expect(result.map(section => section.date)).toEqual(["2026-07-11", "2026-07-12"]);
-    expect(result[1].messages.map(item => item.timestamp)).toEqual(["00:00", "12:00", "13:00"]);
+    expect(result.map((section) => section.date)).toEqual(["2026-07-11", "2026-07-12"]);
+    expect(result[1].messages.map((item) => item.timestamp)).toEqual(["00:00", "12:00", "13:00"]);
   });
 });

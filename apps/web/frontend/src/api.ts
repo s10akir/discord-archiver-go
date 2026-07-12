@@ -22,8 +22,7 @@ function normalizeSections(page: Page<Section>): Page<Section> {
 }
 
 export const api = {
-  guilds: (signal?: AbortSignal) =>
-    get<{ guilds: string[] }>("/api/v1/guilds", signal),
+  guilds: (signal?: AbortSignal) => get<{ guilds: string[] }>("/api/v1/guilds", signal),
   navigation: (guild: string, signal?: AbortSignal) =>
     get<Navigation>(`/api/v1/guilds/${encodeURIComponent(guild)}/navigation`, signal),
   messages: (guild: string, channel: string, before = "", signal?: AbortSignal) =>
