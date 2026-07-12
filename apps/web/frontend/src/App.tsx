@@ -376,7 +376,7 @@ const mediaTabs = [
 function ViewTabs({ guild, channel, active }: { guild: string; channel: string; active: string }) {
   const q = channel ? `?channel=${channel}` : "";
   return (
-    <div className="sticky top-16 z-20 flex gap-1 overflow-x-auto border-b bg-background/90 px-4 backdrop-blur">
+    <div className="sticky top-16 z-20 flex h-12 items-center gap-1 overflow-x-auto border-b bg-background/90 px-4 backdrop-blur">
       {" "}
       <Link
         to={`/guilds/${guild}/messages${q}`}
@@ -508,7 +508,7 @@ function Messages() {
         ) : sections.length === 0 ? (
           <Empty>アーカイブされたメッセージがありません。</Empty>
         ) : (
-          <MessageSections sections={sections} />
+          <MessageSections sections={sections} belowViewTabs />
         )}
       </div>
     </>
@@ -529,12 +529,19 @@ function MessageSkeleton() {
     </div>
   );
 }
-function MessageSections({ sections }: { sections: Section[] }) {
+function MessageSections({
+  sections,
+  belowViewTabs = false,
+}: {
+  sections: Section[];
+  belowViewTabs?: boolean;
+}) {
+  const stickyTop = belowViewTabs ? "top-28" : "top-16";
   return (
     <div className="space-y-7">
       {sections.map((section, index) => (
         <section key={`${section.date}-${index}`}>
-          <div className="sticky top-16 z-10 mb-3 flex items-center gap-3">
+          <div className={`sticky ${stickyTop} z-10 mb-3 flex items-center gap-3`}>
             <span className="h-px flex-1 bg-border" />
             <Badge className="bg-background">{section.date}</Badge>
             <span className="h-px flex-1 bg-border" />
