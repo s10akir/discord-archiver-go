@@ -427,6 +427,11 @@ function Messages() {
   const channel = params.get("channel") || "";
   const [rendering, setRendering] = useState(true);
   const content = useRef<HTMLDivElement>(null);
+  const options = useQuery({
+    queryKey: ["search-options"],
+    queryFn: ({ signal }) => api.searchOptions(signal),
+    enabled: !!channel,
+  });
   const query = useInfiniteQuery({
     queryKey: ["messages", guildId, channel],
     initialPageParam: "",
@@ -474,10 +479,17 @@ function Messages() {
     if (query.isError || query.isFetchNextPageError) setRendering(false);
   }, [query.isError, query.isFetchNextPageError]);
   const sections = query.data ? chronologicalSections(query.data.pages) : [];
+  const channelName = sections
+    .flatMap((section) => section.messages)
+    .find((message) => message.channel_id === channel)?.channel_name;
+  const channelLabel = channel
+    ? options.data?.channels.find((option) => option.value === channel)?.label ||
+      (channelName ? `#${channelName}` : "チャンネル")
+    : "全チャンネル";
   return (
     <>
       {rendering && <RenderingOverlay />}
-      <Header title={channel ? `# ${channel}` : "全チャンネル"} />
+      <Header title={channelLabel} />
       <ViewTabs guild={guildId} channel={channel} active="messages" />
       <div ref={content} className="mx-auto max-w-4xl p-3 sm:p-6">
         {query.data && (
