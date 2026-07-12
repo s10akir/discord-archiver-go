@@ -432,6 +432,11 @@ function Messages() {
     queryFn: ({ signal }) => api.searchOptions(signal),
     enabled: !!channel,
   });
+  const navigation = useQuery({
+    queryKey: ["navigation", guildId],
+    queryFn: ({ signal }) => api.navigation(guildId, signal),
+    enabled: !!channel && !!guildId,
+  });
   const query = useInfiniteQuery({
     queryKey: ["messages", guildId, channel],
     initialPageParam: "",
@@ -482,9 +487,22 @@ function Messages() {
   const channelName = sections
     .flatMap((section) => section.messages)
     .find((message) => message.channel_id === channel)?.channel_name;
+  const threadContext = navigation.data?.groups
+    .flatMap((group) =>
+      group.items.flatMap((parent) =>
+        (parent.threads ?? []).map((thread) => ({ group, parent, thread })),
+      ),
+    )
+    .find(({ thread }) => thread.id === channel);
+  const parentLabel = threadContext
+    ? options.data?.channels.find((option) => option.value === threadContext.parent.id)?.label ||
+      `${threadContext.group.name} / #${threadContext.parent.name}`
+    : undefined;
   const channelLabel = channel
-    ? options.data?.channels.find((option) => option.value === channel)?.label ||
-      (channelName ? `#${channelName}` : "チャンネル")
+    ? threadContext
+      ? `${parentLabel} / ${threadContext.thread.name}`
+      : options.data?.channels.find((option) => option.value === channel)?.label ||
+        (channelName ? `#${channelName}` : "チャンネル")
     : "全チャンネル";
   return (
     <>
