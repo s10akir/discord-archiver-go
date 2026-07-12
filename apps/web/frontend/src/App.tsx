@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import {
   Link,
   Navigate,
@@ -63,26 +64,49 @@ function Header({ title }: { title: string }) {
 }
 function MobileNav() {
   const [open, setOpen] = useState(false);
+
+  useEffect(() => {
+    if (!open) return;
+
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setOpen(false);
+    };
+    document.addEventListener("keydown", closeOnEscape);
+
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [open]);
+
   return (
     <>
       <Button className="lg:hidden" aria-label="ナビゲーション" onClick={() => setOpen(true)}>
         <Menu size={18} />
       </Button>
-      {open && (
-        <div className="fixed inset-0 z-50 bg-black/50 lg:hidden" onClick={() => setOpen(false)}>
-          <aside
-            className="h-full w-[85vw] max-w-sm bg-background p-3"
-            onClick={(e) => e.stopPropagation()}
+      {open &&
+        createPortal(
+          <div
+            className="fixed inset-0 z-50 bg-black/50 lg:hidden"
+            onClick={() => setOpen(false)}
           >
-            <div className="mb-3 flex justify-end">
-              <Button onClick={() => setOpen(false)}>
-                <X size={18} />
-              </Button>
-            </div>
-            <NavContent onNavigate={() => setOpen(false)} />
-          </aside>
-        </div>
-      )}
+            <aside
+              aria-label="ナビゲーション"
+              className="h-full w-[85vw] max-w-sm overflow-y-auto bg-background p-3"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="mb-3 flex justify-end">
+                <Button aria-label="ナビゲーションを閉じる" onClick={() => setOpen(false)}>
+                  <X size={18} />
+                </Button>
+              </div>
+              <NavContent onNavigate={() => setOpen(false)} />
+            </aside>
+          </div>,
+          document.body,
+        )}
     </>
   );
 }
